@@ -28,11 +28,11 @@ export function StreamingText({ content, isStreaming, className = '' }: Streamin
   return (
     <div
       ref={scrollRef}
-      className={`prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed text-gray-200 ${className}`}
+      className={`prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed text-foreground ${className}`}
     >
       {content}
       {isStreaming && (
-        <span className="inline-block w-2 h-4 ml-0.5 bg-gray-400 animate-pulse" />
+        <span className="inline-block w-2 h-4 ml-0.5 bg-foreground/50 animate-pulse" />
       )}
     </div>
   );

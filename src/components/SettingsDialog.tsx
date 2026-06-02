@@ -37,15 +37,15 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-900 border-gray-700 text-gray-100 max-w-md">
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-gray-100">AI 后端设置</DialogTitle>
+          <DialogTitle>AI 后端设置</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-5 py-2">
           {/* 提供商选择 */}
           <div className="space-y-2">
-            <Label className="text-gray-300">AI 提供商</Label>
+            <Label>AI 提供商</Label>
             <Select
               value={providerType}
               onValueChange={(v) => {
@@ -58,10 +58,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 });
               }}
             >
-              <SelectTrigger className="bg-gray-800 border-gray-600">
+              <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="bg-gray-800 border-gray-600">
+              <SelectContent>
                 {AI_PROVIDER_PRESETS.map((p) => (
                   <SelectItem key={p.type} value={p.type}>
                     {p.label}
@@ -74,37 +74,34 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           {/* API Key */}
           {providerType !== 'ollama' && (
             <div className="space-y-2">
-              <Label className="text-gray-300">API Key</Label>
+              <Label>API Key</Label>
               <Input
                 type="password"
                 placeholder="输入你的 API Key"
                 value={apiKey}
                 onChange={(e) => setAISettings({ apiKey: e.target.value })}
-                className="bg-gray-800 border-gray-600 text-gray-100 placeholder-gray-500"
               />
-              <p className="text-xs text-gray-500">密钥仅保存在本地浏览器中</p>
+              <p className="text-xs text-muted-foreground">密钥仅保存在本地浏览器中</p>
             </div>
           )}
 
           {/* 模型名称 */}
           <div className="space-y-2">
-            <Label className="text-gray-300">模型</Label>
+            <Label>模型</Label>
             <Input
               value={model}
               onChange={(e) => setAISettings({ model: e.target.value })}
-              className="bg-gray-800 border-gray-600 text-gray-100"
             />
           </div>
 
           {/* Ollama 专用：baseURL */}
           {providerType === 'ollama' && (
             <div className="space-y-2">
-              <Label className="text-gray-300">Ollama 地址</Label>
+              <Label>Ollama 地址</Label>
               <Input
                 value={baseURL}
                 onChange={(e) => setAISettings({ baseURL: e.target.value })}
                 placeholder="http://localhost:11434"
-                className="bg-gray-800 border-gray-600 text-gray-100 placeholder-gray-500"
               />
             </div>
           )}

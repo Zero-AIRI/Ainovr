@@ -4,11 +4,14 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ParsedNovel, AIProviderType, AppState } from '@/types';
+import type { ParsedNovel, AIProviderType, AppState, ActiveView } from '@/types';
 
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
+      // 视图
+      activeView: 'welcome' as ActiveView,
+
       // 上传的小说
       novels: [],
 
@@ -27,6 +30,8 @@ export const useAppStore = create<AppState>()(
       baseURL: '',
 
       // Actions
+      setActiveView: (view: ActiveView) => set({ activeView: view }),
+
       addNovel: (novel: ParsedNovel) =>
         set((state) => ({ novels: [...state.novels, novel] })),
 
@@ -49,7 +54,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'ainovr-storage',
-      // 只持久化设置和小说元数据（不存 fullText，太大）
+      // 只持久化 AI 设置
       partialize: (state) => ({
         providerType: state.providerType,
         apiKey: state.apiKey,

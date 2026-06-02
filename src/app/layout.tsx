@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: '墨韵仿写 — AI 小说风格模仿创作',
+  title: 'Ainovr — AI 小说风格仿写',
   description: '上传你喜欢的小说，AI 分析风格后仿写全新故事',
 };
 
@@ -26,9 +26,9 @@ export default function RootLayout({
   return (
     <html
       lang="zh-CN"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-gray-950 text-gray-100">
+      <body className="h-full overflow-hidden">
         {children}
         <Toaster />
       </body>

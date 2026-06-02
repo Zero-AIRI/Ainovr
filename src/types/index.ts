@@ -53,8 +53,14 @@ export interface WriteRequest {
   extraRequirements?: string;
 }
 
+/** 当前激活的视图 */
+export type ActiveView = 'welcome' | 'analyze' | 'write';
+
 /** 应用全局状态 */
 export interface AppState {
+  // 视图
+  activeView: ActiveView;
+
   // 上传的小说
   novels: ParsedNovel[];
 
@@ -73,6 +79,7 @@ export interface AppState {
   baseURL: string;
 
   // Actions
+  setActiveView: (view: ActiveView) => void;
   addNovel: (novel: ParsedNovel) => void;
   removeNovel: (id: string) => void;
   clearNovels: () => void;
