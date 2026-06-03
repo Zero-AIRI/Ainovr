@@ -8,6 +8,9 @@ import { buildChatMessages } from '@/lib/ai/chat-prompt';
 import type { AIProviderType, CustomProvider, ThinkingEffort, ChatMessage } from '@/types';
 import { needsApiKey } from '@/types';
 
+/** Chat 上下文最大字符数，防止超出模型上下文窗口 */
+const MAX_CHAT_CHARS = 100_000;
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -46,8 +49,19 @@ export async function POST(req: Request) {
     }
 
     const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
+
+    // 截断小说文本，防止总字符数超出限制
+    let totalChars = 0;
+    const truncatedTexts = (novelTexts || []).map((text: string) => {
+      const remaining = MAX_CHAT_CHARS - totalChars;
+      if (remaining <= 0) return '';
+      const truncated = text.slice(0, remaining);
+      totalChars += truncated.length;
+      return truncated;
+    }).filter((t: string) => t.length > 0);
+
     const { systemPrompt, messages } = buildChatMessages(
-      novelTexts,
+      truncatedTexts,
       novelTitles,
       history || [],
       question,

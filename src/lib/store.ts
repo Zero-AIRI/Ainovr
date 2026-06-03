@@ -4,7 +4,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ParsedNovel, AIProviderType, AppState, ActiveView, CustomProvider } from '@/types';
+import type { ParsedNovel, AIProviderType, AppState, ActiveView, CustomProvider, ChatMessage } from '@/types';
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -36,6 +36,14 @@ export const useAppStore = create<AppState>()(
       // 自定义供应商列表
       customProviders: [] as CustomProvider[],
 
+      // 聊天记录
+      chatMessages: [] as ChatMessage[],
+
+      // 文件同步状态
+      syncStatus: 'no-folder' as const,
+      syncError: null,
+      folderName: null,
+
       // Actions
       setActiveView: (view: ActiveView) => set({ activeView: view }),
 
@@ -57,10 +65,24 @@ export const useAppStore = create<AppState>()(
 
       setIsWriting: (v: boolean) => set({ isWriting: v }),
 
-      setAISettings: (settings) => set((state) => ({ ...state, ...settings })),
+      setAISettings: (settings) => set(settings),
 
       setCustomProviders: (providers: CustomProvider[]) =>
         set({ customProviders: providers }),
+
+      // 聊天记录
+      setChatMessages: (messages: ChatMessage[]) =>
+        set({ chatMessages: messages }),
+
+      addChatMessage: (message: ChatMessage) =>
+        set((state) => ({ chatMessages: [...state.chatMessages, message] })),
+
+      clearChatMessages: () => set({ chatMessages: [] }),
+
+      // 文件同步
+      setSyncStatus: (status) => set({ syncStatus: status }),
+      setSyncError: (error) => set({ syncError: error }),
+      setFolderName: (name) => set({ folderName: name }),
     }),
     {
       name: 'ainovr-storage',

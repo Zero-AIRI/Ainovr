@@ -8,7 +8,6 @@ import { useState } from 'react';
 import { nanoid } from 'nanoid';
 import { Plus, Trash2 } from 'lucide-react';
 import {
-  AI_PROVIDER_PRESETS,
   type AIProviderType,
   type CustomProvider,
   type ThinkingEffort,
@@ -17,7 +16,6 @@ import {
   needsApiKey,
 } from '@/types';
 import { useAppStore } from '@/lib/store';
-import { getDefaultModel } from '@/lib/ai/providers';
 import {
   Dialog,
   DialogContent,
@@ -100,7 +98,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </DialogHeader>
 
         <div className="space-y-5 py-2">
-          {/* 提供商选择 — 统一 Select */}
+          {/* 提供商选择 */}
           <div className="space-y-2">
             <Label>AI 提供商</Label>
             <Select
@@ -121,8 +119,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 } else {
                   setAISettings({
                     providerType: newType,
-                    model: getDefaultModel(newType),
-                    baseURL: newType === 'ollama' ? 'http://localhost:11434' : '',
+                    model: 'deepseek-chat',
+                    baseURL: '',
                   });
                 }
               }}
@@ -131,11 +129,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {AI_PROVIDER_PRESETS.map((p) => (
-                  <SelectItem key={p.type} value={p.type}>
-                    {p.label}
-                  </SelectItem>
-                ))}
+                <SelectItem value="deepseek">DeepSeek</SelectItem>
                 {customProviders.length > 0 && (
                   <>
                     <div className="px-2 py-1.5 text-xs text-muted-foreground">自定义</div>
@@ -222,25 +216,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </div>
           )}
 
-          {/* 模型名称（非 custom 时直接编辑） */}
+          {/* 模型名称（DeepSeek 或未选中自定义时） */}
           {!isCustom && (
             <div className="space-y-2">
               <Label>模型</Label>
               <Input
                 value={model}
                 onChange={(e) => setAISettings({ model: e.target.value })}
-              />
-            </div>
-          )}
-
-          {/* Ollama 地址 */}
-          {providerType === 'ollama' && (
-            <div className="space-y-2">
-              <Label>Ollama 地址</Label>
-              <Input
-                value={baseURL}
-                onChange={(e) => setAISettings({ baseURL: e.target.value })}
-                placeholder="http://localhost:11434"
               />
             </div>
           )}
@@ -323,7 +305,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               className="h-8 text-sm"
             />
 
-            {/* 已添加但未选中的自定义供应商 */}
+            {/* 已添加的自定义供应商列表 */}
             {customProviders.length > 0 && (
               <div className="space-y-1 pt-1">
                 {customProviders.map((p) => (

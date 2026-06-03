@@ -14,10 +14,12 @@ import {
   BookOpen,
   MessageCircle,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { parseTxtFile, formatCharCount } from '@/lib/file-parser';
 import { useAppStore } from '@/lib/store';
 import type { ActiveView } from '@/types';
 import { SettingsDialog } from '@/components/SettingsDialog';
+import { SyncControls } from '@/components/SyncControls';
 
 export function Sidebar() {
   const novels = useAppStore((s) => s.novels);
@@ -38,18 +40,18 @@ export function Sidebar() {
         const fileArr = Array.from(files);
         for (const file of fileArr) {
           if (!file.name.endsWith('.txt')) {
-            alert(`"${file.name}" 不是 TXT 文件，已跳过`);
+            toast.error(`"${file.name}" 不是 TXT 文件，已跳过`);
             continue;
           }
           if (novels.some((n) => n.title === file.name.replace(/\.txt$/i, ''))) {
-            alert(`"${file.name}" 已存在，跳过`);
+            toast.error(`"${file.name}" 已存在，跳过`);
             continue;
           }
           const novel = await parseTxtFile(file);
           addNovel(novel);
         }
       } catch (err) {
-        alert(`文件解析失败: ${err instanceof Error ? err.message : '未知错误'}`);
+        toast.error(`文件解析失败: ${err instanceof Error ? err.message : '未知错误'}`);
       } finally {
         setIsLoading(false);
       }
@@ -83,6 +85,9 @@ export function Sidebar() {
           </div>
         </div>
 
+        {/* 文件同步 */}
+        <SyncControls />
+
         {/* 导入区 */}
         <div className="px-4 pt-4 pb-2">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
@@ -110,7 +115,10 @@ export function Sidebar() {
               accept=".txt"
               multiple
               className="hidden"
-              onChange={(e) => e.target.files && handleFiles(e.target.files)}
+              onChange={(e) => {
+                if (e.target.files) handleFiles(e.target.files);
+                e.target.value = '';
+              }}
             />
             <Upload className={`w-4 h-4 ${isDragging ? 'text-primary' : 'text-muted-foreground'}`} />
             <span className="text-xs text-muted-foreground">

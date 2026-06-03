@@ -11,21 +11,8 @@ export interface ParsedNovel {
   sampleText: string;
 }
 
-/** 风格分析报告 */
-export interface AnalysisReport {
-  style: string;
-  plot: string;
-  character: string;
-  technique: string;
-  tags: string[];
-  fullReport: string;
-}
-
-/** 预设供应商标识 */
-export type PresetProviderType = 'deepseek' | 'moonshot' | 'openai' | 'anthropic' | 'ollama';
-
-/** 完整供应商标识 = 预设 | custom:{id} */
-export type AIProviderType = PresetProviderType | `custom:${string}`;
+/** 供应商标识: deepseek | custom:{id} */
+export type AIProviderType = 'deepseek' | `custom:${string}`;
 
 /** 自定义供应商配置 */
 export interface CustomProvider {
@@ -34,24 +21,6 @@ export interface CustomProvider {
   baseURL: string;
   model: string;
 }
-
-/** AI 提供商配置 */
-export interface AIProviderConfig {
-  type: AIProviderType;
-  label: string;
-  apiKey: string;
-  baseURL?: string;
-  model: string;
-}
-
-/** 预设的 AI 提供商列表 */
-export const AI_PROVIDER_PRESETS: { type: PresetProviderType; label: string; model: string; baseURL?: string }[] = [
-  { type: 'deepseek', label: 'DeepSeek', model: 'deepseek-chat' },
-  { type: 'moonshot', label: 'Kimi (月之暗面)', model: 'moonshot-v1-128k' },
-  { type: 'openai', label: 'OpenAI', model: 'gpt-4o' },
-  { type: 'anthropic', label: 'Claude', model: 'claude-sonnet-4-6' },
-  { type: 'ollama', label: 'Ollama (本地)', model: 'qwen2.5:14b', baseURL: 'http://localhost:11434' },
-];
 
 /** 判断是否为自定义供应商 */
 export function isCustomProvider(type: AIProviderType): type is `custom:${string}` {
@@ -66,7 +35,7 @@ export function getCustomId(type: AIProviderType): string | null {
 
 /** 判断该供应商是否需要 API Key */
 export function needsApiKey(providerType: AIProviderType): boolean {
-  return providerType !== 'ollama';
+  return true; // DeepSeek 和自定义都需要
 }
 
 /** DeepSeek 思考强度 */
@@ -74,14 +43,6 @@ export type ThinkingEffort = 'high' | 'max';
 
 /** 仿写篇幅选项 */
 export type WriteLength = 'fragment' | 'chapter' | 'short';
-
-/** 仿写请求参数 */
-export interface WriteRequest {
-  genre: string;
-  length: WriteLength;
-  synopsis: string;
-  extraRequirements?: string;
-}
 
 /** 聊天消息 */
 export interface ChatMessage {
@@ -121,6 +82,14 @@ export interface AppState {
   // 自定义供应商列表
   customProviders: CustomProvider[];
 
+  // 聊天记录
+  chatMessages: ChatMessage[];
+
+  // 文件同步状态
+  syncStatus: 'idle' | 'loading' | 'syncing' | 'error' | 'no-folder';
+  syncError: string | null;
+  folderName: string | null;
+
   // Actions
   setActiveView: (view: ActiveView) => void;
   addNovel: (novel: ParsedNovel) => void;
@@ -132,4 +101,14 @@ export interface AppState {
   setIsWriting: (v: boolean) => void;
   setAISettings: (settings: Partial<Pick<AppState, 'providerType' | 'apiKey' | 'model' | 'baseURL' | 'thinkingMode' | 'thinkingEffort'>>) => void;
   setCustomProviders: (providers: CustomProvider[]) => void;
+
+  // 聊天记录
+  setChatMessages: (messages: ChatMessage[]) => void;
+  addChatMessage: (message: ChatMessage) => void;
+  clearChatMessages: () => void;
+
+  // 文件同步
+  setSyncStatus: (status: AppState['syncStatus']) => void;
+  setSyncError: (error: string | null) => void;
+  setFolderName: (name: string | null) => void;
 }

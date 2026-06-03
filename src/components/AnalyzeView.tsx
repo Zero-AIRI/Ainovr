@@ -4,11 +4,13 @@
 
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useEffect } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
+import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
 import { needsApiKey } from '@/types';
 
 export function AnalyzeView() {
@@ -26,58 +28,47 @@ export function AnalyzeView() {
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
   const customProviders = useAppStore((s) => s.customProviders);
 
-  const [streamContent, setStreamContent] = useState(analysisReport || '');
+  const { streamContent, isStreaming, error, startFetch, setStreamContent } = useStreamingFetch();
 
-  const startAnalysis = useCallback(async () => {
+  // 组件挂载时从 store 恢复已有报告
+  useEffect(() => {
+    if (analysisReport) {
+      setStreamContent(analysisReport);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 同步 streaming 状态到 store
+  useEffect(() => {
+    setIsAnalyzing(isStreaming);
+  }, [isStreaming, setIsAnalyzing]);
+
+  // 显示错误 toast
+  useEffect(() => {
+    if (error) {
+      toast.error(`分析失败: ${error}`);
+    }
+  }, [error]);
+
+  const startAnalysis = async () => {
     if (!novels.length || (needsApiKey(providerType) && !apiKey)) return;
 
-    setIsAnalyzing(true);
-    setStreamContent('');
     setAnalysisReport(null);
 
-    try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          novelTexts: novels.map((n) => n.sampleText),
-          provider: providerType,
-          apiKey,
-          model,
-          baseURL: baseURL || undefined,
-          thinkingMode,
-          thinkingEffort,
-          customProviders,
-        }),
-      });
+    const fullText = await startFetch('/api/analyze', {
+      novelTexts: novels.map((n) => n.sampleText),
+      provider: providerType,
+      apiKey,
+      model,
+      baseURL: baseURL || undefined,
+      thinkingMode,
+      thinkingEffort,
+      customProviders,
+    });
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: '请求失败' }));
-        throw new Error(err.error || '分析请求失败');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('无法读取响应流');
-
-      const decoder = new TextDecoder();
-      let fullText = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-        setStreamContent(fullText);
-      }
-
+    if (fullText) {
       setAnalysisReport(fullText);
-    } catch (err) {
-      alert(`分析失败: ${err instanceof Error ? err.message : '未知错误'}`);
-    } finally {
-      setIsAnalyzing(false);
     }
-  }, [novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders, setAnalysisReport, setIsAnalyzing]);
+  };
 
   const hasReport = (analysisReport || '').trim().length > 0;
   const noApiKey = needsApiKey(providerType) && !apiKey.trim();

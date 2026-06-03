@@ -6,11 +6,13 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Send, MessageCircle, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
-import { needsApiKey, type ChatMessage } from '@/types';
+import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
+import { needsApiKey } from '@/types';
 
 export function ChatView() {
   const novels = useAppStore((s) => s.novels);
@@ -21,11 +23,13 @@ export function ChatView() {
   const thinkingMode = useAppStore((s) => s.thinkingMode);
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
   const customProviders = useAppStore((s) => s.customProviders);
+  const chatMessages = useAppStore((s) => s.chatMessages);
+  const addChatMessage = useAppStore((s) => s.addChatMessage);
+  const clearChatMessages = useAppStore((s) => s.clearChatMessages);
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamContent, setStreamContent] = useState('');
+
+  const { streamContent, isStreaming, error, startFetch } = useStreamingFetch();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -35,7 +39,21 @@ export function ChatView() {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamContent]);
+  }, [chatMessages, streamContent]);
+
+  // 发送后重新聚焦输入框
+  useEffect(() => {
+    if (!isStreaming) {
+      inputRef.current?.focus();
+    }
+  }, [isStreaming]);
+
+  // 显示错误 toast
+  useEffect(() => {
+    if (error) {
+      toast.error(`问答失败: ${error}`);
+    }
+  }, [error]);
 
   const noApiKey = needsApiKey(providerType) && !apiKey.trim();
   const noNovels = novels.length === 0;
@@ -46,70 +64,32 @@ export function ChatView() {
 
     const question = input.trim();
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: question }]);
-    setIsStreaming(true);
-    setStreamContent('');
+    addChatMessage({ role: 'user', content: question });
 
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          novelTexts: novels.map((n) => n.sampleText),
-          novelTitles: novels.map((n) => n.title),
-          history: messages,
-          question,
-          provider: providerType,
-          apiKey,
-          model,
-          baseURL: baseURL || undefined,
-          thinkingMode,
-          thinkingEffort,
-          customProviders,
-        }),
-      });
+    const fullText = await startFetch('/api/chat', {
+      novelTexts: novels.map((n) => n.sampleText),
+      novelTitles: novels.map((n) => n.title),
+      history: chatMessages,
+      question,
+      provider: providerType,
+      apiKey,
+      model,
+      baseURL: baseURL || undefined,
+      thinkingMode,
+      thinkingEffort,
+      customProviders,
+    });
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: '请求失败' }));
-        throw new Error(err.error || '问答请求失败');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('无法读取响应流');
-
-      const decoder = new TextDecoder();
-      let fullText = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-        setStreamContent(fullText);
-      }
-
-      setMessages((prev) => [...prev, { role: 'assistant', content: fullText }]);
-      setStreamContent('');
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : '未知错误';
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }]);
-      setStreamContent('');
-    } finally {
-      setIsStreaming(false);
+    if (fullText) {
+      addChatMessage({ role: 'assistant', content: fullText });
     }
-  }, [canSend, input, messages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders]);
+  }, [canSend, input, chatMessages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders, startFetch, addChatMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
-
-  const clearChat = () => {
-    setMessages([]);
-    setStreamContent('');
   };
 
   // 空状态
@@ -139,8 +119,8 @@ export function ChatView() {
             基于 {novels.length} 本小说的内容回答
           </p>
         </div>
-        {messages.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={clearChat} className="text-muted-foreground hover:text-foreground">
+        {chatMessages.length > 0 && (
+          <Button variant="ghost" size="sm" onClick={clearChatMessages} className="text-muted-foreground hover:text-foreground">
             <Trash2 className="w-3.5 h-3.5 mr-1" />
             清空
           </Button>
@@ -149,7 +129,7 @@ export function ChatView() {
 
       {/* 消息区 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.length === 0 && !isStreaming && (
+        {chatMessages.length === 0 && !isStreaming && (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
             <MessageCircle className="w-10 h-10 text-primary/30" />
             <div className="space-y-1">
@@ -177,7 +157,7 @@ export function ChatView() {
           </div>
         )}
 
-        {messages.map((msg, i) => (
+        {chatMessages.map((msg, i) => (
           <div
             key={i}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
