@@ -55,16 +55,25 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
         const data = await syncService.loadAll();
         if (data) {
-          // 一次性注入 store，避免逐字段触发订阅
-          useAppStore.setState({
-            novels: data.novels,
-            analysisReport: data.analysisReport,
-            writeResult: data.writeResult,
-            chatMessages: data.chatMessages,
-          });
+          // 合并而非覆盖：保留 IndexedDB 中已有的小说（含 rawText/importConfig）
+          const currentState = useAppStore.getState();
+          const existingIds = new Set(currentState.novels.map((n) => n.id));
+          const mergedNovels = [...currentState.novels];
+          for (const novel of data.novels) {
+            if (!existingIds.has(novel.id)) {
+              mergedNovels.push(novel);
+            }
+          }
 
-          // 记录初始 novel IDs
-          prevNovelIds.current = new Set(data.novels.map((n) => n.id));
+          // 先记录 ID 集合，再 setState，避免触发订阅时将已有小说当作"新增"
+          prevNovelIds.current = new Set(mergedNovels.map((n) => n.id));
+
+          useAppStore.setState({
+            novels: mergedNovels,
+            analysisReport: data.analysisReport ?? currentState.analysisReport,
+            writeResult: data.writeResult ?? currentState.writeResult,
+            chatMessages: data.chatMessages.length > 0 ? data.chatMessages : currentState.chatMessages,
+          });
         }
 
         setSyncStatus('idle');

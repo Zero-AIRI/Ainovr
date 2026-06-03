@@ -3,12 +3,8 @@
 // ============================================
 
 import { storeDirectoryHandle, loadDirectoryHandle, removeDirectoryHandle } from './idb-helpers';
+import { safeFilename } from '@/lib/utils';
 import type { ParsedNovel, ChatMessage } from '@/types';
-
-/** 过滤文件名中的非法字符 */
-function safeFilename(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_');
-}
 
 /** 写入文本文件 */
 async function writeTextFile(
@@ -174,10 +170,16 @@ class SyncService {
       const metaList: { id: string; title: string; totalChars: number; sampleText: string }[] =
         JSON.parse(metaText);
 
-      // 为每个小说读取 fullText
+      // 为每个小说读取 fullText（并行）
+      const results = await Promise.all(
+        metaList.map(async (item) => {
+          const fullText = await readTextFile(this.novelsHandle!, `${safeFilename(item.title)}.txt`);
+          return { item, fullText };
+        }),
+      );
+
       const novels: ParsedNovel[] = [];
-      for (const item of metaList) {
-        const fullText = await readTextFile(this.novelsHandle, `${safeFilename(item.title)}.txt`);
+      for (const { item, fullText } of results) {
         if (fullText !== null) {
           novels.push({
             id: item.id,
@@ -185,14 +187,20 @@ class SyncService {
             totalChars: item.totalChars,
             fullText,
             sampleText: item.sampleText,
+            rawText: null,
+            importConfig: null,
           });
+        } else {
+          console.warn(`Sync: 小说"${item.title}"的 .txt 文件缺失，已跳过`);
         }
       }
 
-      const analysisReport = await readTextFile(this.dotAinovrHandle, 'analysis.md');
-      const writeResult = await readTextFile(this.dotAinovrHandle, 'write-result.md');
-
-      const chatText = await readTextFile(this.dotAinovrHandle, 'chat.json');
+      // 并行读取元数据
+      const [analysisReport, writeResult, chatText] = await Promise.all([
+        readTextFile(this.dotAinovrHandle, 'analysis.md'),
+        readTextFile(this.dotAinovrHandle, 'write-result.md'),
+        readTextFile(this.dotAinovrHandle, 'chat.json'),
+      ]);
       let chatMessages: ChatMessage[] = [];
       if (chatText) {
         try {

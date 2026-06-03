@@ -3,6 +3,38 @@
 // ============================================
 // 参考项目：txt_reform、text_edit、novel-proofer、nanoWriter、novel-proofreader
 
+import type { CleaningConfig, CleaningStepId } from '@/types';
+
+/** 全部 10 个清洗步骤 ID */
+export const ALL_CLEANING_STEPS: CleaningStepId[] = [
+  'encoding', 'urls', 'promos', 'authorNotes', 'watermarks',
+  'nav', 'separators', 'toc', 'punctuation', 'blankLines',
+];
+
+/** 预设对应的步骤列表（模块级常量，避免每次调用重新分配） */
+const STEPS_STANDARD = ALL_CLEANING_STEPS.filter(
+  (s) => s !== 'promos' && s !== 'authorNotes',
+);
+const STEPS_LIGHT: CleaningStepId[] = ['encoding', 'punctuation', 'blankLines'];
+
+/** 根据 CleaningConfig 解析出需要执行的步骤列表 */
+export function resolveCleaningSteps(config: CleaningConfig): CleaningStepId[] {
+  switch (config.preset) {
+    case 'aggressive':
+      return ALL_CLEANING_STEPS;
+    case 'standard':
+      return STEPS_STANDARD;
+    case 'light':
+      return STEPS_LIGHT;
+    case 'none':
+      return config.enabledSteps;
+    default:
+      // 防御性回退：未知预设 → 运行全部步骤
+      console.warn(`Unknown cleaning preset: "${config.preset}", falling back to aggressive`);
+      return ALL_CLEANING_STEPS;
+  }
+}
+
 // ---- Step 1: 编码清理 ----
 
 /** 去掉 BOM、零宽字符、替换字符、控制字符，统一换行 */
@@ -249,29 +281,31 @@ export function collapseBlankLines(text: string): string {
 // 主管道
 // ============================================
 
-/** 清洗网络小说 TXT 文本 */
-export function cleanNovelText(raw: string): string {
+/** 清洗网络小说 TXT 文本（可选 CleaningConfig，不传则默认运行全部步骤） */
+export function cleanNovelText(raw: string, config?: CleaningConfig): string {
+  const steps = config ? resolveCleaningSteps(config) : ALL_CLEANING_STEPS;
+
   // Step 1: 编码清理
-  let text = stripEncodingArtifacts(raw);
+  let text = steps.includes('encoding') ? stripEncodingArtifacts(raw) : raw;
 
   // Step 2-8: 按行过滤
   let lines = text.split('\n');
-  lines = removeUrlLines(lines);
-  lines = removePromoLines(lines);
-  lines = removeAuthorNoteLines(lines);
-  lines = removeWatermarkLines(lines);
-  lines = removeNavLines(lines);
-  lines = removeSeparatorLines(lines);
-  lines = removeTocBlocks(lines);
+  if (steps.includes('urls')) lines = removeUrlLines(lines);
+  if (steps.includes('promos')) lines = removePromoLines(lines);
+  if (steps.includes('authorNotes')) lines = removeAuthorNoteLines(lines);
+  if (steps.includes('watermarks')) lines = removeWatermarkLines(lines);
+  if (steps.includes('nav')) lines = removeNavLines(lines);
+  if (steps.includes('separators')) lines = removeSeparatorLines(lines);
+  if (steps.includes('toc')) lines = removeTocBlocks(lines);
 
   // 合并
   text = lines.join('\n');
 
   // Step 9: 标点规范化
-  text = normalizePunctuation(text);
+  if (steps.includes('punctuation')) text = normalizePunctuation(text);
 
   // Step 10: 空行整理
-  text = collapseBlankLines(text);
+  if (steps.includes('blankLines')) text = collapseBlankLines(text);
 
   return text;
 }
