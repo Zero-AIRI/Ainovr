@@ -29,16 +29,16 @@ export function createAIModel(provider: AIProviderType, options: ProviderOptions
     })(options.model);
   }
 
-  // DeepSeek
+  // DeepSeek — base_url 不含 /v1（SDK 自动追加路径）
   return createOpenAI({
     apiKey: options.apiKey,
-    baseURL: 'https://api.deepseek.com/v1',
+    baseURL: 'https://api.deepseek.com',
   })(options.model);
 }
 
 /** 获取预设提供商默认模型名 */
 export function getDefaultModel(): string {
-  return 'deepseek-chat';
+  return 'deepseek-v4-flash';
 }
 
 /** 构建 DeepSeek 思考模式的 providerOptions */
@@ -46,12 +46,13 @@ export function buildThinkingOptions(
   provider: AIProviderType,
   thinkingMode: boolean,
   thinkingEffort: ThinkingEffort,
-): { openai: { reasoning_effort: string } } | undefined {
+): { openai: { reasoning_effort: string; thinking: { type: string } } } | undefined {
   if (provider !== 'deepseek' || !thinkingMode) return undefined;
 
   return {
     openai: {
       reasoning_effort: thinkingEffort,
+      thinking: { type: 'enabled' },
     },
   };
 }
