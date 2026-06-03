@@ -3,9 +3,20 @@
 // ============================================
 
 import { streamText } from 'ai';
-import { createAIModel } from '@/lib/ai/providers';
+import { createAIModel, buildThinkingOptions } from '@/lib/ai/providers';
 import { buildWriteMessages, buildContinueMessages } from '@/lib/ai/write-prompt';
-import type { AIProviderType, WriteLength } from '@/types';
+import type { AIProviderType, WriteLength, CustomProvider, ThinkingEffort } from '@/types';
+import { needsApiKey } from '@/types';
+
+interface CommonParams {
+  provider: AIProviderType;
+  apiKey: string;
+  model: string;
+  baseURL?: string;
+  thinkingMode?: boolean;
+  thinkingEffort?: ThinkingEffort;
+  customProviders?: CustomProvider[];
+}
 
 export async function POST(req: Request) {
   try {
@@ -29,20 +40,26 @@ async function handleWrite(body: {
   length: WriteLength;
   synopsis: string;
   extraRequirements?: string;
-  provider: AIProviderType;
-  apiKey: string;
-  model: string;
-  baseURL?: string;
-}) {
-  const { analysisReport, genre, length, synopsis, extraRequirements, provider, apiKey, model, baseURL } = body;
+} & CommonParams) {
+  const {
+    analysisReport, genre, length, synopsis, extraRequirements,
+    provider, apiKey, model, baseURL,
+    thinkingMode, thinkingEffort, customProviders,
+  } = body;
 
-  if (!apiKey) {
+  if (needsApiKey(provider) && !apiKey) {
     return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
   }
 
-  const aiModel = createAIModel(provider, { apiKey, model, baseURL });
+  const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
   const { systemPrompt, userMessage } = buildWriteMessages(
     analysisReport, genre, length, synopsis, extraRequirements,
+  );
+
+  const providerOptions = buildThinkingOptions(
+    provider,
+    thinkingMode ?? false,
+    thinkingEffort ?? 'high',
   );
 
   const result = streamText({
@@ -50,6 +67,7 @@ async function handleWrite(body: {
     system: systemPrompt,
     prompt: userMessage,
     maxOutputTokens: 8192,
+    ...(providerOptions && { providerOptions }),
   });
 
   return result.toTextStreamResponse();
@@ -59,20 +77,26 @@ async function handleContinue(body: {
   analysisReport: string;
   existingText: string;
   extraHint?: string;
-  provider: AIProviderType;
-  apiKey: string;
-  model: string;
-  baseURL?: string;
-}) {
-  const { analysisReport, existingText, extraHint, provider, apiKey, model, baseURL } = body;
+} & CommonParams) {
+  const {
+    analysisReport, existingText, extraHint,
+    provider, apiKey, model, baseURL,
+    thinkingMode, thinkingEffort, customProviders,
+  } = body;
 
-  if (!apiKey) {
+  if (needsApiKey(provider) && !apiKey) {
     return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
   }
 
-  const aiModel = createAIModel(provider, { apiKey, model, baseURL });
+  const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
   const { systemPrompt, userMessage } = buildContinueMessages(
     analysisReport, existingText, extraHint,
+  );
+
+  const providerOptions = buildThinkingOptions(
+    provider,
+    thinkingMode ?? false,
+    thinkingEffort ?? 'high',
   );
 
   const result = streamText({
@@ -80,6 +104,7 @@ async function handleContinue(body: {
     system: systemPrompt,
     prompt: userMessage,
     maxOutputTokens: 4096,
+    ...(providerOptions && { providerOptions }),
   });
 
   return result.toTextStreamResponse();

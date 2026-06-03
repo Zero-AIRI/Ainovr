@@ -4,7 +4,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ParsedNovel, AIProviderType, AppState, ActiveView } from '@/types';
+import type { ParsedNovel, AIProviderType, AppState, ActiveView, CustomProvider } from '@/types';
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -29,6 +29,13 @@ export const useAppStore = create<AppState>()(
       model: 'deepseek-chat',
       baseURL: '',
 
+      // DeepSeek 思考模式
+      thinkingMode: false,
+      thinkingEffort: 'high' as const,
+
+      // 自定义供应商列表
+      customProviders: [] as CustomProvider[],
+
       // Actions
       setActiveView: (view: ActiveView) => set({ activeView: view }),
 
@@ -51,15 +58,20 @@ export const useAppStore = create<AppState>()(
       setIsWriting: (v: boolean) => set({ isWriting: v }),
 
       setAISettings: (settings) => set((state) => ({ ...state, ...settings })),
+
+      setCustomProviders: (providers: CustomProvider[]) =>
+        set({ customProviders: providers }),
     }),
     {
       name: 'ainovr-storage',
-      // 只持久化 AI 设置
       partialize: (state) => ({
         providerType: state.providerType,
         apiKey: state.apiKey,
         model: state.model,
         baseURL: state.baseURL,
+        thinkingMode: state.thinkingMode,
+        thinkingEffort: state.thinkingEffort,
+        customProviders: state.customProviders,
       }),
     }
   )

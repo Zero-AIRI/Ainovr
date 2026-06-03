@@ -12,6 +12,7 @@ import {
   Upload,
   FileText,
   BookOpen,
+  MessageCircle,
 } from 'lucide-react';
 import { parseTxtFile, formatCharCount } from '@/lib/file-parser';
 import { useAppStore } from '@/lib/store';
@@ -66,6 +67,7 @@ export function Sidebar() {
   );
 
   const navItems: { key: ActiveView; label: string; icon: typeof Sparkles }[] = [
+    { key: 'chat', label: '小说问答', icon: MessageCircle },
     { key: 'analyze', label: '风格分析', icon: Sparkles },
     { key: 'write', label: '风格仿写', icon: PenTool },
   ];
@@ -157,14 +159,14 @@ export function Sidebar() {
             <button
               key={key}
               onClick={() => setActiveView(key)}
-              disabled={key === 'write' && !analysisReport}
+              disabled={(key === 'write' && !analysisReport)}
               className={`
                 w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors
                 ${activeView === key
                   ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
                   : 'text-foreground/70 hover:bg-sidebar-accent/60 hover:text-foreground'
                 }
-                ${key === 'write' && !analysisReport ? 'opacity-40 cursor-not-allowed' : ''}
+                ${key === 'write' && !analysisReport ? 'opacity-40 cursor-not-allowed' : ''}}
               `}
             >
               <Icon className="w-4 h-4" />

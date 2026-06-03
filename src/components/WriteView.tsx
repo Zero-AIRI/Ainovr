@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
-import type { WriteLength } from '@/types';
+import { needsApiKey, type WriteLength } from '@/types';
 
 const GENRE_OPTIONS = [
   '玄幻', '仙侠', '都市', '历史', '科幻',
@@ -37,10 +37,13 @@ const LENGTH_OPTIONS: { value: WriteLength; label: string; desc: string }[] = [
 export function WriteView() {
   const novels = useAppStore((s) => s.novels);
   const analysisReport = useAppStore((s) => s.analysisReport);
+  const providerType = useAppStore((s) => s.providerType);
   const apiKey = useAppStore((s) => s.apiKey);
   const model = useAppStore((s) => s.model);
-  const providerType = useAppStore((s) => s.providerType);
   const baseURL = useAppStore((s) => s.baseURL);
+  const thinkingMode = useAppStore((s) => s.thinkingMode);
+  const thinkingEffort = useAppStore((s) => s.thinkingEffort);
+  const customProviders = useAppStore((s) => s.customProviders);
   const isWriting = useAppStore((s) => s.isWriting);
   const setIsWriting = useAppStore((s) => s.setIsWriting);
   const setActiveView = useAppStore((s) => s.setActiveView);
@@ -51,7 +54,18 @@ export function WriteView() {
   const [extraRequirements, setExtraRequirements] = useState('');
   const [streamContent, setStreamContent] = useState('');
 
-  const canWrite = synopsis.trim().length > 0 && !!analysisReport && !!apiKey;
+  // ollama/custom 不强制要求 apiKey
+  const canWrite = synopsis.trim().length > 0 && !!analysisReport && (!needsApiKey(providerType) || !!apiKey);
+
+  const commonBody = {
+    provider: providerType,
+    apiKey,
+    model,
+    baseURL: baseURL || undefined,
+    thinkingMode,
+    thinkingEffort,
+    customProviders,
+  };
 
   const startWriting = useCallback(async () => {
     if (!canWrite) return;
@@ -70,10 +84,7 @@ export function WriteView() {
           length,
           synopsis,
           extraRequirements: extraRequirements || undefined,
-          provider: providerType,
-          apiKey,
-          model,
-          baseURL: baseURL || undefined,
+          ...commonBody,
         }),
       });
 
@@ -101,7 +112,7 @@ export function WriteView() {
     } finally {
       setIsWriting(false);
     }
-  }, [canWrite, analysisReport, genre, length, synopsis, extraRequirements, providerType, apiKey, model, baseURL, setIsWriting]);
+  }, [canWrite, analysisReport, genre, length, synopsis, extraRequirements, commonBody, setIsWriting]);
 
   const handleContinue = useCallback(async () => {
     if (!streamContent || !analysisReport) return;
@@ -116,10 +127,7 @@ export function WriteView() {
           mode: 'continue',
           analysisReport,
           existingText: streamContent.slice(-3000),
-          provider: providerType,
-          apiKey,
-          model,
-          baseURL: baseURL || undefined,
+          ...commonBody,
         }),
       });
 
@@ -145,7 +153,7 @@ export function WriteView() {
     } finally {
       setIsWriting(false);
     }
-  }, [streamContent, analysisReport, providerType, apiKey, model, baseURL, setIsWriting]);
+  }, [streamContent, analysisReport, commonBody, setIsWriting]);
 
   const handleExport = () => {
     if (!streamContent) return;

@@ -9,6 +9,7 @@ import { RefreshCw, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
+import { needsApiKey } from '@/types';
 
 export function AnalyzeView() {
   const novels = useAppStore((s) => s.novels);
@@ -17,15 +18,18 @@ export function AnalyzeView() {
   const setAnalysisReport = useAppStore((s) => s.setAnalysisReport);
   const setIsAnalyzing = useAppStore((s) => s.setIsAnalyzing);
   const setActiveView = useAppStore((s) => s.setActiveView);
+  const providerType = useAppStore((s) => s.providerType);
   const apiKey = useAppStore((s) => s.apiKey);
   const model = useAppStore((s) => s.model);
-  const providerType = useAppStore((s) => s.providerType);
   const baseURL = useAppStore((s) => s.baseURL);
+  const thinkingMode = useAppStore((s) => s.thinkingMode);
+  const thinkingEffort = useAppStore((s) => s.thinkingEffort);
+  const customProviders = useAppStore((s) => s.customProviders);
 
   const [streamContent, setStreamContent] = useState(analysisReport || '');
 
   const startAnalysis = useCallback(async () => {
-    if (!novels.length || !apiKey) return;
+    if (!novels.length || (needsApiKey(providerType) && !apiKey)) return;
 
     setIsAnalyzing(true);
     setStreamContent('');
@@ -41,6 +45,9 @@ export function AnalyzeView() {
           apiKey,
           model,
           baseURL: baseURL || undefined,
+          thinkingMode,
+          thinkingEffort,
+          customProviders,
         }),
       });
 
@@ -70,10 +77,10 @@ export function AnalyzeView() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [novels, apiKey, providerType, model, baseURL, setAnalysisReport, setIsAnalyzing]);
+  }, [novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders, setAnalysisReport, setIsAnalyzing]);
 
   const hasReport = (analysisReport || '').trim().length > 0;
-  const noApiKey = !apiKey.trim();
+  const noApiKey = needsApiKey(providerType) && !apiKey.trim();
   const noNovels = novels.length === 0;
 
   return (

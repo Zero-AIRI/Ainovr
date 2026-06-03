@@ -13,16 +13,27 @@ export interface ParsedNovel {
 
 /** 风格分析报告 */
 export interface AnalysisReport {
-  style: string;        // 文风特征
-  plot: string;         // 剧情结构
-  character: string;    // 人物塑造
-  technique: string;    // 叙事技巧
-  tags: string[];       // 风格标签
-  fullReport: string;   // 完整报告原文
+  style: string;
+  plot: string;
+  character: string;
+  technique: string;
+  tags: string[];
+  fullReport: string;
 }
 
-/** AI 后端提供商类型 */
-export type AIProviderType = 'deepseek' | 'moonshot' | 'openai' | 'anthropic' | 'ollama';
+/** 预设供应商标识 */
+export type PresetProviderType = 'deepseek' | 'moonshot' | 'openai' | 'anthropic' | 'ollama';
+
+/** 完整供应商标识 = 预设 | custom:{id} */
+export type AIProviderType = PresetProviderType | `custom:${string}`;
+
+/** 自定义供应商配置 */
+export interface CustomProvider {
+  id: string;
+  label: string;
+  baseURL: string;
+  model: string;
+}
 
 /** AI 提供商配置 */
 export interface AIProviderConfig {
@@ -34,13 +45,32 @@ export interface AIProviderConfig {
 }
 
 /** 预设的 AI 提供商列表 */
-export const AI_PROVIDER_PRESETS: Omit<AIProviderConfig, 'apiKey'>[] = [
+export const AI_PROVIDER_PRESETS: { type: PresetProviderType; label: string; model: string; baseURL?: string }[] = [
   { type: 'deepseek', label: 'DeepSeek', model: 'deepseek-chat' },
   { type: 'moonshot', label: 'Kimi (月之暗面)', model: 'moonshot-v1-128k' },
   { type: 'openai', label: 'OpenAI', model: 'gpt-4o' },
   { type: 'anthropic', label: 'Claude', model: 'claude-sonnet-4-6' },
   { type: 'ollama', label: 'Ollama (本地)', model: 'qwen2.5:14b', baseURL: 'http://localhost:11434' },
 ];
+
+/** 判断是否为自定义供应商 */
+export function isCustomProvider(type: AIProviderType): type is `custom:${string}` {
+  return type.startsWith('custom:');
+}
+
+/** 从 AIProviderType 提取自定义供应商 id */
+export function getCustomId(type: AIProviderType): string | null {
+  if (!isCustomProvider(type)) return null;
+  return type.slice('custom:'.length);
+}
+
+/** 判断该供应商是否需要 API Key */
+export function needsApiKey(providerType: AIProviderType): boolean {
+  return providerType !== 'ollama';
+}
+
+/** DeepSeek 思考强度 */
+export type ThinkingEffort = 'high' | 'max';
 
 /** 仿写篇幅选项 */
 export type WriteLength = 'fragment' | 'chapter' | 'short';
@@ -53,8 +83,14 @@ export interface WriteRequest {
   extraRequirements?: string;
 }
 
+/** 聊天消息 */
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 /** 当前激活的视图 */
-export type ActiveView = 'welcome' | 'analyze' | 'write';
+export type ActiveView = 'welcome' | 'analyze' | 'write' | 'chat';
 
 /** 应用全局状态 */
 export interface AppState {
@@ -78,6 +114,13 @@ export interface AppState {
   model: string;
   baseURL: string;
 
+  // DeepSeek 思考模式
+  thinkingMode: boolean;
+  thinkingEffort: ThinkingEffort;
+
+  // 自定义供应商列表
+  customProviders: CustomProvider[];
+
   // Actions
   setActiveView: (view: ActiveView) => void;
   addNovel: (novel: ParsedNovel) => void;
@@ -87,5 +130,6 @@ export interface AppState {
   setIsAnalyzing: (v: boolean) => void;
   setWriteResult: (result: string | null) => void;
   setIsWriting: (v: boolean) => void;
-  setAISettings: (settings: Partial<Pick<AppState, 'providerType' | 'apiKey' | 'model' | 'baseURL'>>) => void;
+  setAISettings: (settings: Partial<Pick<AppState, 'providerType' | 'apiKey' | 'model' | 'baseURL' | 'thinkingMode' | 'thinkingEffort'>>) => void;
+  setCustomProviders: (providers: CustomProvider[]) => void;
 }

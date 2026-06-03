@@ -1,11 +1,11 @@
 // ============================================
-// POST /api/analyze — 流式风格分析接口
+// POST /api/chat — 小说问答流式接口
 // ============================================
 
 import { streamText } from 'ai';
 import { createAIModel, buildThinkingOptions } from '@/lib/ai/providers';
-import { buildAnalyzeMessages } from '@/lib/ai/analyze-prompt';
-import type { AIProviderType, CustomProvider, ThinkingEffort } from '@/types';
+import { buildChatMessages } from '@/lib/ai/chat-prompt';
+import type { AIProviderType, CustomProvider, ThinkingEffort, ChatMessage } from '@/types';
 import { needsApiKey } from '@/types';
 
 export async function POST(req: Request) {
@@ -13,6 +13,9 @@ export async function POST(req: Request) {
     const body = await req.json();
     const {
       novelTexts,
+      novelTitles,
+      history,
+      question,
       provider,
       apiKey,
       model,
@@ -22,6 +25,9 @@ export async function POST(req: Request) {
       customProviders,
     }: {
       novelTexts: string[];
+      novelTitles: string[];
+      history: ChatMessage[];
+      question: string;
       provider: AIProviderType;
       apiKey: string;
       model: string;
@@ -31,8 +37,8 @@ export async function POST(req: Request) {
       customProviders?: CustomProvider[];
     } = body;
 
-    if (!novelTexts?.length) {
-      return new Response(JSON.stringify({ error: '请上传至少一本小说' }), { status: 400 });
+    if (!question?.trim()) {
+      return new Response(JSON.stringify({ error: '请输入问题' }), { status: 400 });
     }
 
     if (needsApiKey(provider) && !apiKey) {
@@ -40,7 +46,12 @@ export async function POST(req: Request) {
     }
 
     const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
-    const { systemPrompt, userMessage } = buildAnalyzeMessages(novelTexts);
+    const { systemPrompt, messages } = buildChatMessages(
+      novelTexts,
+      novelTitles,
+      history || [],
+      question,
+    );
 
     const providerOptions = buildThinkingOptions(
       provider,
@@ -51,15 +62,15 @@ export async function POST(req: Request) {
     const result = streamText({
       model: aiModel,
       system: systemPrompt,
-      prompt: userMessage,
+      messages,
       maxOutputTokens: 4096,
       ...(providerOptions && { providerOptions }),
     });
 
     return result.toTextStreamResponse();
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : '分析失败';
-    console.error('分析接口错误:', error);
+    const message = error instanceof Error ? error.message : '问答失败';
+    console.error('问答接口错误:', error);
     return new Response(JSON.stringify({ error: message }), { status: 500 });
   }
 }

@@ -4,6 +4,7 @@
 
 import { nanoid } from 'nanoid';
 import type { ParsedNovel } from '@/types';
+import { cleanNovelText } from './text-cleaner';
 
 /**
  * 解析上传的 TXT 文件
@@ -12,11 +13,12 @@ export function parseTxtFile(file: File): Promise<ParsedNovel> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target?.result as string;
-      if (!text) {
+      const rawText = e.target?.result as string;
+      if (!rawText) {
         reject(new Error('文件读取失败'));
         return;
       }
+      const text = cleanNovelText(rawText);
       const title = file.name.replace(/\.txt$/i, '');
       const totalChars = text.length;
       const sampleText = smartSample(text);

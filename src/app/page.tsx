@@ -7,6 +7,7 @@
 import { useAppStore } from '@/lib/store';
 import { Sidebar } from '@/components/Sidebar';
 import { WelcomeView } from '@/components/WelcomeView';
+import { ChatView } from '@/components/ChatView';
 import { AnalyzeView } from '@/components/AnalyzeView';
 import { WriteView } from '@/components/WriteView';
 
@@ -18,6 +19,7 @@ export default function HomePage() {
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden bg-background">
         {activeView === 'welcome' && <WelcomeView />}
+        {activeView === 'chat' && <ChatView />}
         {activeView === 'analyze' && <AnalyzeView />}
         {activeView === 'write' && <WriteView />}
       </main>
