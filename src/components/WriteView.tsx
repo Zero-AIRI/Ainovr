@@ -4,7 +4,7 @@
 
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Download, RefreshCw, Sparkles } from 'lucide-react';
 import { saveAs } from 'file-saver';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/select';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
+import { useStreamingFetch } from '@/lib/use-streaming-fetch';
 import { needsApiKey, type WriteLength } from '@/types';
 
 const GENRE_OPTIONS = [
@@ -54,18 +55,25 @@ export function WriteView() {
   const [extraRequirements, setExtraRequirements] = useState('');
   const [streamContent, setStreamContent] = useState('');
 
+  const { startStream, abort } = useStreamingFetch();
+  // 用 ref 追踪续写内容，避免 stale closure
+  const streamRef = useRef(streamContent);
+  streamRef.current = streamContent;
+
+  // 组件卸载时取消请求
+  useEffect(() => abort, [abort]);
+
   // ollama/custom 不强制要求 apiKey
   const canWrite = synopsis.trim().length > 0 && !!analysisReport && (!needsApiKey(providerType) || !!apiKey);
 
-  const commonBody = {
-    provider: providerType,
-    apiKey,
-    model,
-    baseURL: baseURL || undefined,
-    thinkingMode,
-    thinkingEffort,
-    customProviders,
-  };
+  // 只发送选中的自定义供应商（而非完整列表）
+  const selectedProvider = useMemo(() => {
+    if (providerType.startsWith('custom:')) {
+      const id = providerType.slice('custom:'.length);
+      return customProviders.find((p) => p.id === id) || null;
+    }
+    return null;
+  }, [providerType, customProviders]);
 
   const startWriting = useCallback(async () => {
     if (!canWrite) return;
@@ -73,87 +81,62 @@ export function WriteView() {
     setIsWriting(true);
     setStreamContent('');
 
-    try {
-      const response = await fetch('/api/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'write',
-          analysisReport,
-          genre,
-          length,
-          synopsis,
-          extraRequirements: extraRequirements || undefined,
-          ...commonBody,
-        }),
-      });
+    const result = await startStream({
+      url: '/api/write',
+      body: {
+        mode: 'write',
+        analysisReport,
+        genre,
+        length,
+        synopsis,
+        extraRequirements: extraRequirements || undefined,
+        provider: providerType,
+        apiKey,
+        model,
+        baseURL: baseURL || undefined,
+        thinkingMode,
+        thinkingEffort,
+        customProviders: selectedProvider ? [selectedProvider] : [],
+      },
+      onChunk: setStreamContent,
+      onError: (msg) => alert(`仿写失败: ${msg}`),
+    });
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: '请求失败' }));
-        throw new Error(err.error || '仿写请求失败');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('无法读取响应流');
-
-      const decoder = new TextDecoder();
-      let fullText = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-        setStreamContent(fullText);
-      }
-    } catch (err) {
-      alert(`仿写失败: ${err instanceof Error ? err.message : '未知错误'}`);
-    } finally {
-      setIsWriting(false);
+    if (result === undefined) {
+      // 被取消
     }
-  }, [canWrite, analysisReport, genre, length, synopsis, extraRequirements, commonBody, setIsWriting]);
+    setIsWriting(false);
+  }, [canWrite, analysisReport, genre, length, synopsis, extraRequirements, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream, setIsWriting]);
 
   const handleContinue = useCallback(async () => {
-    if (!streamContent || !analysisReport) return;
+    if (!streamRef.current || !analysisReport) return;
 
     setIsWriting(true);
+    const existingText = streamRef.current.slice(-3000);
 
-    try {
-      const response = await fetch('/api/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'continue',
-          analysisReport,
-          existingText: streamContent.slice(-3000),
-          ...commonBody,
-        }),
-      });
+    const result = await startStream({
+      url: '/api/write',
+      body: {
+        mode: 'continue',
+        analysisReport,
+        existingText,
+        provider: providerType,
+        apiKey,
+        model,
+        baseURL: baseURL || undefined,
+        thinkingMode,
+        thinkingEffort,
+        customProviders: selectedProvider ? [selectedProvider] : [],
+      },
+      onChunk: (fullText) => setStreamContent(existingText + fullText),
+      onError: (msg) => alert(`续写失败: ${msg}`),
+    });
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: '请求失败' }));
-        throw new Error(err.error || '续写请求失败');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('无法读取响应流');
-
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        setStreamContent((prev) => prev + chunk);
-      }
-    } catch (err) {
-      alert(`续写失败: ${err instanceof Error ? err.message : '未知错误'}`);
-    } finally {
-      setIsWriting(false);
+    if (result === undefined) {
+      // 被取消
     }
-  }, [streamContent, analysisReport, commonBody, setIsWriting]);
+    setIsWriting(false);
+  }, [analysisReport, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream, setIsWriting]);
 
   const handleExport = () => {
     if (!streamContent) return;

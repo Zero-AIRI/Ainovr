@@ -41,6 +41,10 @@ export async function POST(req: Request) {
       return new Response(JSON.stringify({ error: '请输入问题' }), { status: 400 });
     }
 
+    if (!novelTexts?.length) {
+      return new Response(JSON.stringify({ error: '请先上传至少一本小说' }), { status: 400 });
+    }
+
     if (needsApiKey(provider) && !apiKey) {
       return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
     }

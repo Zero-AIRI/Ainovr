@@ -64,6 +64,20 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'ainovr-storage',
+      version: 1,
+      migrate: (persisted, version) => {
+        if (version === 0) {
+          // v0 → v1: 新增 thinkingMode, thinkingEffort, customProviders
+          const state = persisted as Record<string, unknown>;
+          return {
+            ...state,
+            thinkingMode: (state as Record<string, unknown>).thinkingMode ?? false,
+            thinkingEffort: (state as Record<string, unknown>).thinkingEffort ?? 'high',
+            customProviders: (state as Record<string, unknown>).customProviders ?? [],
+          };
+        }
+        return persisted as Record<string, unknown>;
+      },
       partialize: (state) => ({
         providerType: state.providerType,
         apiKey: state.apiKey,

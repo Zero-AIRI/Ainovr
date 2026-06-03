@@ -64,9 +64,11 @@ export function getCustomId(type: AIProviderType): string | null {
   return type.slice('custom:'.length);
 }
 
-/** 判断该供应商是否需要 API Key */
+/** 判断该供应商是否需要 API Key（ollama 和自定义供应商可选） */
 export function needsApiKey(providerType: AIProviderType): boolean {
-  return providerType !== 'ollama';
+  if (providerType === 'ollama') return false;
+  if (isCustomProvider(providerType)) return false;
+  return true;
 }
 
 /** DeepSeek 思考强度 */

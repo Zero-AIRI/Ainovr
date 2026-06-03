@@ -25,7 +25,7 @@ export function createAIModel(provider: AIProviderType, options: ProviderOptions
     const cp = options.customProviders.find((p) => p.id === id);
     if (!cp) throw new Error(`自定义供应商不存在: ${id}`);
     return createOpenAI({
-      apiKey: options.apiKey || undefined,
+      apiKey: options.apiKey || 'no-key',
       baseURL: cp.baseURL,
     })(options.model);
   }

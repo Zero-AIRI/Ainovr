@@ -32,10 +32,13 @@ export function buildChatMessages(
 
 ${knowledgeBase}`;
 
-  const messages = history.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // 只允许 user/assistant 角色通过，防止注入 system 消息
+  const messages = history
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
 
   // 追加当前用户问题
   messages.push({ role: 'user', content: userQuestion });

@@ -19,6 +19,9 @@ import { useAppStore } from '@/lib/store';
 import type { ActiveView } from '@/types';
 import { SettingsDialog } from '@/components/SettingsDialog';
 
+/** 文件大小限制：20 MB */
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
 export function Sidebar() {
   const novels = useAppStore((s) => s.novels);
   const addNovel = useAppStore((s) => s.addNovel);
@@ -37,6 +40,10 @@ export function Sidebar() {
       try {
         const fileArr = Array.from(files);
         for (const file of fileArr) {
+          if (file.size > MAX_FILE_SIZE) {
+            alert(`"${file.name}" 超过 20MB 限制，已跳过`);
+            continue;
+          }
           if (!file.name.endsWith('.txt')) {
             alert(`"${file.name}" 不是 TXT 文件，已跳过`);
             continue;

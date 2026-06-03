@@ -4,12 +4,13 @@
 
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Send, MessageCircle, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
+import { useStreamingFetch } from '@/lib/use-streaming-fetch';
 import { needsApiKey, type ChatMessage } from '@/types';
 
 export function ChatView() {
@@ -29,6 +30,9 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendingRef = useRef(false); // 防止双击 Enter 重复发送
+
+  const { startStream, abort } = useStreamingFetch();
 
   // 自动滚到底部
   useEffect(() => {
@@ -37,68 +41,62 @@ export function ChatView() {
     }
   }, [messages, streamContent]);
 
+  // 组件卸载时取消请求
+  useEffect(() => abort, [abort]);
+
+  // 只发送选中的自定义供应商
+  const selectedProvider = useMemo(() => {
+    if (providerType.startsWith('custom:')) {
+      const id = providerType.slice('custom:'.length);
+      return customProviders.find((p) => p.id === id) || null;
+    }
+    return null;
+  }, [providerType, customProviders]);
+
   const noApiKey = needsApiKey(providerType) && !apiKey.trim();
   const noNovels = novels.length === 0;
-  const canSend = input.trim().length > 0 && !isStreaming && !noApiKey && !noNovels;
 
   const handleSend = useCallback(async () => {
-    if (!canSend) return;
-
+    // 用 ref 做即时守卫，防止双击
+    if (sendingRef.current) return;
     const question = input.trim();
+    if (!question || isStreaming || noApiKey || noNovels) return;
+
+    sendingRef.current = true;
     setInput('');
     setMessages((prev) => [...prev, { role: 'user', content: question }]);
     setIsStreaming(true);
     setStreamContent('');
 
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          novelTexts: novels.map((n) => n.sampleText),
-          novelTitles: novels.map((n) => n.title),
-          history: messages,
-          question,
-          provider: providerType,
-          apiKey,
-          model,
-          baseURL: baseURL || undefined,
-          thinkingMode,
-          thinkingEffort,
-          customProviders,
-        }),
-      });
+    const result = await startStream({
+      url: '/api/chat',
+      body: {
+        novelTexts: novels.map((n) => n.sampleText),
+        novelTitles: novels.map((n) => n.title),
+        history: messages,
+        question,
+        provider: providerType,
+        apiKey,
+        model,
+        baseURL: baseURL || undefined,
+        thinkingMode,
+        thinkingEffort,
+        customProviders: selectedProvider ? [selectedProvider] : [],
+      },
+      onChunk: setStreamContent,
+      onError: (msg) => {
+        setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${msg}` }]);
+        setStreamContent('');
+      },
+    });
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: '请求失败' }));
-        throw new Error(err.error || '问答请求失败');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('无法读取响应流');
-
-      const decoder = new TextDecoder();
-      let fullText = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-        setStreamContent(fullText);
-      }
-
-      setMessages((prev) => [...prev, { role: 'assistant', content: fullText }]);
-      setStreamContent('');
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : '未知错误';
-      setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }]);
-      setStreamContent('');
-    } finally {
-      setIsStreaming(false);
+    if (result !== undefined) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: result }]);
     }
-  }, [canSend, input, messages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders]);
+    setStreamContent('');
+    setIsStreaming(false);
+    sendingRef.current = false;
+  }, [input, isStreaming, noApiKey, noNovels, messages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -234,7 +232,7 @@ export function ChatView() {
           />
           <Button
             onClick={handleSend}
-            disabled={!canSend}
+            disabled={isStreaming || !input.trim() || noApiKey || noNovels}
             size="icon"
             className="h-10 w-10 shrink-0"
           >
