@@ -2,6 +2,72 @@
 // AI 小说风格仿写 — 核心类型定义
 // ============================================
 
+// ---- 文本清洗相关 ----
+
+/** 清洗步骤 ID（对应 text-cleaner.ts 的 10 个步骤） */
+export type CleaningStepId =
+  | 'encoding'       // Step 1: 编码清理
+  | 'urls'           // Step 2: URL 行
+  | 'promos'         // Step 3: 广告推广
+  | 'authorNotes'    // Step 4: 作者碎碎念
+  | 'watermarks'     // Step 5: 水印/来源
+  | 'nav'            // Step 6: 导航行
+  | 'separators'     // Step 7: 分隔线
+  | 'toc'            // Step 8: 目录块
+  | 'punctuation'    // Step 9: 标点规范化
+  | 'blankLines';    // Step 10: 空行整理
+
+/** 清洗预设方案 */
+export type CleaningPreset = 'aggressive' | 'standard' | 'light' | 'none';
+
+/** 清洗配置 */
+export interface CleaningConfig {
+  preset: CleaningPreset;
+  /** 仅 preset='none' 时生效，手动选择启用的步骤 */
+  enabledSteps: CleaningStepId[];
+}
+
+// ---- 采样相关 ----
+
+/** 采样策略 */
+export type SamplingStrategy = 'full' | 'chapter' | 'fixedLength' | 'customLimit';
+
+/** 章节采样配置 */
+export interface ChapterSamplingConfig {
+  headCount: number;    // 开头章节数 (default 3)
+  midCount: number;     // 中间章节数 (default 3)
+  tailCount: number;    // 结尾章节数 (default 3)
+  randomCount: number;  // 随机章节数 (default 2)
+}
+
+/** 固定长度采样配置 */
+export interface FixedLengthSamplingConfig {
+  headRatio: number;   // 头部比例 0-1 (default 0.30)
+  midRatio: number;    // 中部比例 0-1 (default 0.25)
+  tailRatio: number;   // 尾部比例 0-1 (default 0.20)
+}
+
+/** 采样配置 */
+export interface SamplingConfig {
+  strategy: SamplingStrategy;
+  /** 章节采样参数 */
+  chapter: ChapterSamplingConfig;
+  /** 固定长度采样参数 */
+  fixedLength: FixedLengthSamplingConfig;
+  /** 自定义字数限制 */
+  customCharLimit: number;
+  /** 覆盖模型推荐的字数上限，null = 自动根据模型推算 */
+  maxCharsOverride: number | null;
+}
+
+/** 导入管道配置 */
+export interface ImportConfig {
+  cleaning: CleaningConfig;
+  sampling: SamplingConfig;
+}
+
+// ---- 核心数据结构 ----
+
 /** 已上传的参考小说 */
 export interface ParsedNovel {
   id: string;
@@ -9,6 +75,10 @@ export interface ParsedNovel {
   totalChars: number;
   fullText: string;
   sampleText: string;
+  /** 原始未清洗文本，用于重新处理（旧数据可能为 null） */
+  rawText: string | null;
+  /** 产生当前结果的配置（旧数据可能为 null） */
+  importConfig: ImportConfig | null;
 }
 
 /** 供应商标识: deepseek | custom:{id} */
@@ -85,6 +155,9 @@ export interface AppState {
   // 聊天记录
   chatMessages: ChatMessage[];
 
+  // 文本处理配置
+  importConfig: ImportConfig;
+
   // 文件同步状态
   syncStatus: 'idle' | 'loading' | 'syncing' | 'error' | 'no-folder';
   syncError: string | null;
@@ -101,6 +174,11 @@ export interface AppState {
   setIsWriting: (v: boolean) => void;
   setAISettings: (settings: Partial<Pick<AppState, 'providerType' | 'apiKey' | 'model' | 'baseURL' | 'thinkingMode' | 'thinkingEffort'>>) => void;
   setCustomProviders: (providers: CustomProvider[]) => void;
+
+  // 文本处理
+  updateImportConfig: (config: Partial<ImportConfig>) => void;
+  reprocessNovel: (novelId: string) => Promise<void>;
+  reprocessAllNovels: () => Promise<void>;
 
   // 聊天记录
   setChatMessages: (messages: ChatMessage[]) => void;
