@@ -9,18 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.81",
     "@ai-sdk/openai": "^3.0.67",
     "@base-ui/react": "^1.5.0",
     "ai": "^6.0.193",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "dexie": "^4.4.3",
     "file-saver": "^2.0.5",
     "lucide-react": "^1.17.0",
     "nanoid": "^5.1.11",
     "next": "16.2.6",
-    "next-themes": "^0.4.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "shadcn": "^4.9.0",

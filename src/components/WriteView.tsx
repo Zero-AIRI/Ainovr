@@ -4,8 +4,9 @@
 
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Download, RefreshCw, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
 import { saveAs } from 'file-saver';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -20,7 +21,7 @@ import {
 } from '@/components/ui/select';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
-import { useStreamingFetch } from '@/lib/use-streaming-fetch';
+import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
 import { needsApiKey, type WriteLength } from '@/types';
 
 const GENRE_OPTIONS = [
@@ -46,97 +47,120 @@ export function WriteView() {
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
   const customProviders = useAppStore((s) => s.customProviders);
   const isWriting = useAppStore((s) => s.isWriting);
+  const writeResult = useAppStore((s) => s.writeResult);
   const setIsWriting = useAppStore((s) => s.setIsWriting);
+  const setWriteResult = useAppStore((s) => s.setWriteResult);
   const setActiveView = useAppStore((s) => s.setActiveView);
 
   const [genre, setGenre] = useState('玄幻');
   const [length, setLength] = useState<WriteLength>('chapter');
   const [synopsis, setSynopsis] = useState('');
   const [extraRequirements, setExtraRequirements] = useState('');
-  const [streamContent, setStreamContent] = useState('');
 
-  const { startStream, abort } = useStreamingFetch();
-  // 用 ref 追踪续写内容，避免 stale closure
-  const streamRef = useRef(streamContent);
-  streamRef.current = streamContent;
+  const { streamContent, isStreaming, error, startFetch, setStreamContent, abortRef } = useStreamingFetch();
 
-  // 组件卸载时取消请求
-  useEffect(() => abort, [abort]);
+  // 组件挂载时从 store 恢复已有写作结果
+  useEffect(() => {
+    if (writeResult) {
+      setStreamContent(writeResult);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 同步 streaming 状态到 store
+  useEffect(() => {
+    setIsWriting(isStreaming);
+  }, [isStreaming, setIsWriting]);
+
+  // 显示错误 toast
+  useEffect(() => {
+    if (error) {
+      toast.error(`仿写失败: ${error}`);
+    }
+  }, [error]);
 
   // ollama/custom 不强制要求 apiKey
   const canWrite = synopsis.trim().length > 0 && !!analysisReport && (!needsApiKey(providerType) || !!apiKey);
 
-  // 只发送选中的自定义供应商（而非完整列表）
-  const selectedProvider = useMemo(() => {
-    if (providerType.startsWith('custom:')) {
-      const id = providerType.slice('custom:'.length);
-      return customProviders.find((p) => p.id === id) || null;
-    }
-    return null;
-  }, [providerType, customProviders]);
+  // 构造通用 AI 参数（仅在请求时构建，避免作为 useCallback 依赖导致每次 render 重建）
+  const buildAIBody = () => ({
+    provider: providerType,
+    apiKey,
+    model,
+    baseURL: baseURL || undefined,
+    thinkingMode,
+    thinkingEffort,
+    customProviders,
+  });
 
-  const startWriting = useCallback(async () => {
+  const startWriting = async () => {
     if (!canWrite) return;
 
-    setIsWriting(true);
-    setStreamContent('');
-
-    const result = await startStream({
-      url: '/api/write',
-      body: {
-        mode: 'write',
-        analysisReport,
-        genre,
-        length,
-        synopsis,
-        extraRequirements: extraRequirements || undefined,
-        provider: providerType,
-        apiKey,
-        model,
-        baseURL: baseURL || undefined,
-        thinkingMode,
-        thinkingEffort,
-        customProviders: selectedProvider ? [selectedProvider] : [],
-      },
-      onChunk: setStreamContent,
-      onError: (msg) => alert(`仿写失败: ${msg}`),
+    const fullText = await startFetch('/api/write', {
+      mode: 'write',
+      analysisReport,
+      genre,
+      length,
+      synopsis,
+      extraRequirements: extraRequirements || undefined,
+      ...buildAIBody(),
     });
 
-    if (result === undefined) {
-      // 被取消
+    if (fullText) {
+      setWriteResult(fullText);
     }
-    setIsWriting(false);
-  }, [canWrite, analysisReport, genre, length, synopsis, extraRequirements, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream, setIsWriting]);
+  };
 
-  const handleContinue = useCallback(async () => {
-    if (!streamRef.current || !analysisReport) return;
+  const handleContinue = async () => {
+    if (!streamContent || !analysisReport) return;
+
+    // 续写需要特殊处理：使用 setStreamContent 追加而非覆盖
+    // 所以不走 startFetch，直接手写（但带 AbortController）
+    const controller = new AbortController();
+    abortRef.current = controller; // 让 hook 的 unmount cleanup 能 abort 这次请求
 
     setIsWriting(true);
-    const existingText = streamRef.current.slice(-3000);
 
-    const result = await startStream({
-      url: '/api/write',
-      body: {
-        mode: 'continue',
-        analysisReport,
-        existingText,
-        provider: providerType,
-        apiKey,
-        model,
-        baseURL: baseURL || undefined,
-        thinkingMode,
-        thinkingEffort,
-        customProviders: selectedProvider ? [selectedProvider] : [],
-      },
-      onChunk: (fullText) => setStreamContent(existingText + fullText),
-      onError: (msg) => alert(`续写失败: ${msg}`),
-    });
+    try {
+      const response = await fetch('/api/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'continue',
+          analysisReport,
+          existingText: streamContent.slice(-3000),
+          ...buildAIBody(),
+        }),
+        signal: controller.signal,
+      });
 
-    if (result === undefined) {
-      // 被取消
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: '请求失败' }));
+        throw new Error(err.error || '续写请求失败');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('无法读取响应流');
+
+      const decoder = new TextDecoder();
+      let continuation = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        continuation += chunk;
+        setStreamContent((prev) => prev + chunk);
+      }
+
+      setWriteResult(streamContent + continuation);
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      toast.error(`续写失败: ${err instanceof Error ? err.message : '未知错误'}`);
+    } finally {
+      setIsWriting(false);
     }
-    setIsWriting(false);
-  }, [analysisReport, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream, setIsWriting]);
+  };
 
   const handleExport = () => {
     if (!streamContent) return;

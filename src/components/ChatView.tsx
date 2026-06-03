@@ -4,14 +4,15 @@
 
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Send, MessageCircle, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
-import { useStreamingFetch } from '@/lib/use-streaming-fetch';
-import { needsApiKey, type ChatMessage } from '@/types';
+import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
+import { needsApiKey } from '@/types';
 
 export function ChatView() {
   const novels = useAppStore((s) => s.novels);
@@ -22,92 +23,73 @@ export function ChatView() {
   const thinkingMode = useAppStore((s) => s.thinkingMode);
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
   const customProviders = useAppStore((s) => s.customProviders);
+  const chatMessages = useAppStore((s) => s.chatMessages);
+  const addChatMessage = useAppStore((s) => s.addChatMessage);
+  const clearChatMessages = useAppStore((s) => s.clearChatMessages);
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamContent, setStreamContent] = useState('');
+
+  const { streamContent, isStreaming, error, startFetch } = useStreamingFetch();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const sendingRef = useRef(false); // 防止双击 Enter 重复发送
-
-  const { startStream, abort } = useStreamingFetch();
 
   // 自动滚到底部
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamContent]);
+  }, [chatMessages, streamContent]);
 
-  // 组件卸载时取消请求
-  useEffect(() => abort, [abort]);
-
-  // 只发送选中的自定义供应商
-  const selectedProvider = useMemo(() => {
-    if (providerType.startsWith('custom:')) {
-      const id = providerType.slice('custom:'.length);
-      return customProviders.find((p) => p.id === id) || null;
+  // 发送后重新聚焦输入框
+  useEffect(() => {
+    if (!isStreaming) {
+      inputRef.current?.focus();
     }
-    return null;
-  }, [providerType, customProviders]);
+  }, [isStreaming]);
+
+  // 显示错误 toast
+  useEffect(() => {
+    if (error) {
+      toast.error(`问答失败: ${error}`);
+    }
+  }, [error]);
 
   const noApiKey = needsApiKey(providerType) && !apiKey.trim();
   const noNovels = novels.length === 0;
+  const canSend = input.trim().length > 0 && !isStreaming && !noApiKey && !noNovels;
 
   const handleSend = useCallback(async () => {
-    // 用 ref 做即时守卫，防止双击
-    if (sendingRef.current) return;
+    if (!canSend) return;
+
     const question = input.trim();
-    if (!question || isStreaming || noApiKey || noNovels) return;
-
-    sendingRef.current = true;
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: question }]);
-    setIsStreaming(true);
-    setStreamContent('');
+    addChatMessage({ role: 'user', content: question });
 
-    const result = await startStream({
-      url: '/api/chat',
-      body: {
-        novelTexts: novels.map((n) => n.sampleText),
-        novelTitles: novels.map((n) => n.title),
-        history: messages,
-        question,
-        provider: providerType,
-        apiKey,
-        model,
-        baseURL: baseURL || undefined,
-        thinkingMode,
-        thinkingEffort,
-        customProviders: selectedProvider ? [selectedProvider] : [],
-      },
-      onChunk: setStreamContent,
-      onError: (msg) => {
-        setMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${msg}` }]);
-        setStreamContent('');
-      },
+    const fullText = await startFetch('/api/chat', {
+      novelTexts: novels.map((n) => n.sampleText),
+      novelTitles: novels.map((n) => n.title),
+      history: chatMessages,
+      question,
+      provider: providerType,
+      apiKey,
+      model,
+      baseURL: baseURL || undefined,
+      thinkingMode,
+      thinkingEffort,
+      customProviders,
     });
 
-    if (result !== undefined) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: result }]);
+    if (fullText) {
+      addChatMessage({ role: 'assistant', content: fullText });
     }
-    setStreamContent('');
-    setIsStreaming(false);
-    sendingRef.current = false;
-  }, [input, isStreaming, noApiKey, noNovels, messages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream]);
+  }, [canSend, input, chatMessages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders, startFetch, addChatMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
-
-  const clearChat = () => {
-    setMessages([]);
-    setStreamContent('');
   };
 
   // 空状态
@@ -137,8 +119,8 @@ export function ChatView() {
             基于 {novels.length} 本小说的内容回答
           </p>
         </div>
-        {messages.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={clearChat} className="text-muted-foreground hover:text-foreground">
+        {chatMessages.length > 0 && (
+          <Button variant="ghost" size="sm" onClick={clearChatMessages} className="text-muted-foreground hover:text-foreground">
             <Trash2 className="w-3.5 h-3.5 mr-1" />
             清空
           </Button>
@@ -147,7 +129,7 @@ export function ChatView() {
 
       {/* 消息区 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.length === 0 && !isStreaming && (
+        {chatMessages.length === 0 && !isStreaming && (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
             <MessageCircle className="w-10 h-10 text-primary/30" />
             <div className="space-y-1">
@@ -175,7 +157,7 @@ export function ChatView() {
           </div>
         )}
 
-        {messages.map((msg, i) => (
+        {chatMessages.map((msg, i) => (
           <div
             key={i}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -232,7 +214,7 @@ export function ChatView() {
           />
           <Button
             onClick={handleSend}
-            disabled={isStreaming || !input.trim() || noApiKey || noNovels}
+            disabled={!canSend}
             size="icon"
             className="h-10 w-10 shrink-0"
           >

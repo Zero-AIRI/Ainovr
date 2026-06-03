@@ -4,12 +4,13 @@
 
 'use client';
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useEffect } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
-import { useStreamingFetch } from '@/lib/use-streaming-fetch';
+import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
 import { needsApiKey } from '@/types';
 
 export function AnalyzeView() {
@@ -27,55 +28,47 @@ export function AnalyzeView() {
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
   const customProviders = useAppStore((s) => s.customProviders);
 
-  const [streamContent, setStreamContent] = useState(analysisReport || '');
-  const { startStream, abort } = useStreamingFetch();
+  const { streamContent, isStreaming, error, startFetch, setStreamContent } = useStreamingFetch();
 
-  // 同步 store 中 analysisReport 变化（解决返回时 stale 状态）
+  // 组件挂载时从 store 恢复已有报告
   useEffect(() => {
-    if (!isAnalyzing) {
-      setStreamContent(analysisReport || '');
+    if (analysisReport) {
+      setStreamContent(analysisReport);
     }
-  }, [analysisReport, isAnalyzing]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 组件卸载时取消请求
-  useEffect(() => abort, [abort]);
+  // 同步 streaming 状态到 store
+  useEffect(() => {
+    setIsAnalyzing(isStreaming);
+  }, [isStreaming, setIsAnalyzing]);
 
-  const selectedProvider = useMemo(() => {
-    if (providerType.startsWith('custom:')) {
-      const id = providerType.slice('custom:'.length);
-      return customProviders.find((p) => p.id === id) || null;
+  // 显示错误 toast
+  useEffect(() => {
+    if (error) {
+      toast.error(`分析失败: ${error}`);
     }
-    return null;
-  }, [providerType, customProviders]);
+  }, [error]);
 
-  const startAnalysis = useCallback(async () => {
+  const startAnalysis = async () => {
     if (!novels.length || (needsApiKey(providerType) && !apiKey)) return;
 
-    setIsAnalyzing(true);
-    setStreamContent('');
     setAnalysisReport(null);
 
-    const result = await startStream({
-      url: '/api/analyze',
-      body: {
-        novelTexts: novels.map((n) => n.sampleText),
-        provider: providerType,
-        apiKey,
-        model,
-        baseURL: baseURL || undefined,
-        thinkingMode,
-        thinkingEffort,
-        customProviders: selectedProvider ? [selectedProvider] : [],
-      },
-      onChunk: setStreamContent,
-      onError: (msg) => alert(`分析失败: ${msg}`),
+    const fullText = await startFetch('/api/analyze', {
+      novelTexts: novels.map((n) => n.sampleText),
+      provider: providerType,
+      apiKey,
+      model,
+      baseURL: baseURL || undefined,
+      thinkingMode,
+      thinkingEffort,
+      customProviders,
     });
 
-    if (result !== undefined) {
-      setAnalysisReport(result);
+    if (fullText) {
+      setAnalysisReport(fullText);
     }
-    setIsAnalyzing(false);
-  }, [novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, selectedProvider, startStream, setAnalysisReport, setIsAnalyzing]);
+  };
 
   const hasReport = (analysisReport || '').trim().length > 0;
   const noApiKey = needsApiKey(providerType) && !apiKey.trim();
