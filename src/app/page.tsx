@@ -4,6 +4,7 @@
 
 'use client';
 
+import { useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { Sidebar } from '@/components/Sidebar';
 import { WelcomeView } from '@/components/WelcomeView';
@@ -14,6 +15,12 @@ import { SyncProvider } from '@/lib/sync/sync-provider';
 
 export default function HomePage() {
   const activeView = useAppStore((s) => s.activeView);
+  const loadNovelsFromIDB = useAppStore((s) => s.loadNovelsFromIDB);
+
+  // 启动时从 IndexedDB 恢复小说数据
+  useEffect(() => {
+    loadNovelsFromIDB();
+  }, [loadNovelsFromIDB]);
 
   return (
     <SyncProvider>

@@ -111,4 +111,7 @@ export interface AppState {
   setSyncStatus: (status: AppState['syncStatus']) => void;
   setSyncError: (error: string | null) => void;
   setFolderName: (name: string | null) => void;
+
+  // 启动恢复
+  loadNovelsFromIDB: () => Promise<void>;
 }

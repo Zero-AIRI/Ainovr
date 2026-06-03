@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ParsedNovel, AIProviderType, AppState, ActiveView, CustomProvider, ChatMessage } from '@/types';
+import { saveNovel, loadAllNovels, removeNovel as idbRemoveNovel, clearAllNovels as idbClearNovels } from '@/lib/sync/idb-helpers';
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -47,13 +48,20 @@ export const useAppStore = create<AppState>()(
       // Actions
       setActiveView: (view: ActiveView) => set({ activeView: view }),
 
-      addNovel: (novel: ParsedNovel) =>
-        set((state) => ({ novels: [...state.novels, novel] })),
+      addNovel: (novel: ParsedNovel) => {
+        set((state) => ({ novels: [...state.novels, novel] }));
+        saveNovel(novel).catch(console.error);
+      },
 
-      removeNovel: (id: string) =>
-        set((state) => ({ novels: state.novels.filter((n) => n.id !== id) })),
+      removeNovel: (id: string) => {
+        set((state) => ({ novels: state.novels.filter((n) => n.id !== id) }));
+        idbRemoveNovel(id).catch(console.error);
+      },
 
-      clearNovels: () => set({ novels: [], analysisReport: null }),
+      clearNovels: () => {
+        set({ novels: [], analysisReport: null });
+        idbClearNovels().catch(console.error);
+      },
 
       setAnalysisReport: (report: string | null) =>
         set({ analysisReport: report }),
@@ -83,6 +91,16 @@ export const useAppStore = create<AppState>()(
       setSyncStatus: (status) => set({ syncStatus: status }),
       setSyncError: (error) => set({ syncError: error }),
       setFolderName: (name) => set({ folderName: name }),
+
+      // 从 IndexedDB 恢复小说数据（启动时调用）
+      loadNovelsFromIDB: async () => {
+        try {
+          const novels = await loadAllNovels();
+          set({ novels });
+        } catch (err) {
+          console.error('从 IndexedDB 恢复小说失败:', err);
+        }
+      },
     }),
     {
       name: 'ainovr-storage',
