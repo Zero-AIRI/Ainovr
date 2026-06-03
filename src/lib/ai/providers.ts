@@ -38,7 +38,7 @@ export function createAIModel(provider: AIProviderType, options: ProviderOptions
 
 /** 获取预设提供商默认模型名 */
 export function getDefaultModel(): string {
-  return 'deepseek-v4-flash';
+  return 'deepseek-v4-pro';
 }
 
 /** 构建 DeepSeek 思考模式的 providerOptions */

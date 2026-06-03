@@ -41,8 +41,8 @@ export const useAppStore = create<AppState>()(
 
       // AI 设置
       providerType: 'deepseek' as AIProviderType,
-      apiKey: '',
-      model: 'deepseek-chat',
+      apiKey: process.env.NEXT_PUBLIC_DEEPSEEK_API_KEY ?? '',
+      model: 'deepseek-v4-pro',
       baseURL: '',
 
       // DeepSeek 思考模式

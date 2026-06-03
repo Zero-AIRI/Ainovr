@@ -115,6 +115,7 @@ export function ImportSettingsDialog({
 
   /** 将 ImportConfig 同步到本地状态 */
   const loadConfig = (src: ImportConfig) => {
+    if (!src?.cleaning) src = DEFAULT_IMPORT_CONFIG;
     setCleaningPreset(src.cleaning.preset);
     setEnabledSteps(src.cleaning.enabledSteps);
     setSamplingStrategy(src.sampling.strategy);
@@ -136,7 +137,7 @@ export function ImportSettingsDialog({
 
     const src = novelId
       ? (novels.find((n) => n.id === novelId)?.importConfig ?? DEFAULT_IMPORT_CONFIG)
-      : storeImportConfig;
+      : (storeImportConfig ?? DEFAULT_IMPORT_CONFIG);
 
     loadConfig(src);
   }, [open, novelId, novels, storeImportConfig]);
