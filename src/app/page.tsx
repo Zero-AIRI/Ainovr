@@ -5,54 +5,34 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useAppStore } from '@/lib/store';
+import { useProjectStore } from '@/lib/store/project';
+import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { Sidebar } from '@/components/Sidebar';
-import { AnalyzeView } from '@/components/AnalyzeView';
-import { WriteView } from '@/components/WriteView';
+import { SourceLibraryView } from '@/components/source/SourceLibraryView';
+import { SourceProcessView } from '@/components/source/SourceProcessView';
+import { WritingProjectView } from '@/components/project/WritingProjectView';
+import { LayerGenerationView } from '@/components/generation/LayerGenerationView';
+import { ChapterGenerationView } from '@/components/chapter/ChapterGenerationView';
+
 export default function HomePage() {
-  const activeView = useAppStore((s) => s.activeView);
-  const loadNovelsFromIDB = useAppStore((s) => s.loadNovelsFromIDB);
-  const addNovel = useAppStore((s) => s.addNovel);
+  const activeView = useProjectStore((s) => s.activeView);
+  const loadSourceNovels = useSourceLibraryStore((s) => s.loadSourceNovels);
+  const loadProjects = useProjectStore((s) => s.loadProjects);
 
-  // 启动时从 IndexedDB 恢复小说数据，然后检测服务端 data/ 文件夹中的新书
   useEffect(() => {
-    const init = async () => {
-      await loadNovelsFromIDB();
-
-      // 自动检测 data/novels/ 中的小说（用户直接复制到 data 文件夹的文件）
-      try {
-        const listRes = await fetch('/api/novels/list');
-        if (!listRes.ok) return;
-        const { novels: serverNovels } = await listRes.json();
-        if (!serverNovels?.length) return;
-
-        const existingIds = new Set(useAppStore.getState().novels.map((n) => n.id));
-
-        for (const info of serverNovels) {
-          if (existingIds.has(info.id)) continue;
-
-          // 加载完整小说数据
-          const detailRes = await fetch(`/api/novels/detail?id=${encodeURIComponent(info.id)}`);
-          if (!detailRes.ok) continue;
-          const { novel } = await detailRes.json();
-          if (novel) {
-            addNovel(novel);
-          }
-        }
-      } catch (err) {
-        console.error('自动检测 data/ 文件夹失败:', err);
-      }
-    };
-
-    init();
-  }, [loadNovelsFromIDB, addNovel]);
+    loadSourceNovels();
+    loadProjects();
+  }, [loadSourceNovels, loadProjects]);
 
   return (
     <div className="flex h-screen">
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden bg-background">
-        {activeView === 'analyze' && <AnalyzeView />}
-        {activeView === 'write' && <WriteView />}
+        {activeView === 'source-library' && <SourceLibraryView />}
+        {activeView === 'source-process' && <SourceProcessView />}
+        {activeView === 'writing-project' && <WritingProjectView />}
+        {activeView === 'layer-generation' && <LayerGenerationView />}
+        {activeView === 'chapter-generation' && <ChapterGenerationView />}
       </main>
     </div>
   );

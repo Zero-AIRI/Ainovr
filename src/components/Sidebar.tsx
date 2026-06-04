@@ -4,107 +4,28 @@
 
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import {
   Settings,
-  Sparkles,
+  Library,
   PenTool,
-  Upload,
-  FileText,
+  Layers,
   BookOpen,
 } from 'lucide-react';
-import { toast } from 'sonner';
-import { parseTxtFile, formatCharCount } from '@/lib/file-parser';
-import { useAppStore } from '@/lib/store';
-import { saveNovelToServer } from '@/lib/utils';
+import { useProjectStore } from '@/lib/store/project';
 import type { ActiveView } from '@/types';
 import { SettingsDialog } from '@/components/SettingsDialog';
 
-/** 文件大小限制：20 MB */
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
-
 export function Sidebar() {
-  const novels = useAppStore((s) => s.novels);
-  const addNovel = useAppStore((s) => s.addNovel);
-  const removeNovel = useAppStore((s) => s.removeNovel);
-  const activeView = useAppStore((s) => s.activeView);
-  const setActiveView = useAppStore((s) => s.setActiveView);
-  const analysisReport = useAppStore((s) => s.analysisReport);
-
-  const [isDragging, setIsDragging] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const activeView = useProjectStore((s) => s.activeView);
+  const setActiveView = useProjectStore((s) => s.setActiveView);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const handleFiles = useCallback(
-    async (files: FileList | File[]) => {
-      setIsLoading(true);
-      try {
-        const fileArr = Array.from(files);
-        for (const file of fileArr) {
-          if (file.size > MAX_FILE_SIZE) {
-            alert(`"${file.name}" 超过 20MB 限制，已跳过`);
-            continue;
-          }
-          if (!file.name.endsWith('.txt')) {
-            toast.error(`"${file.name}" 不是 TXT 文件，已跳过`);
-            continue;
-          }
-          const currentNovels = useAppStore.getState().novels;
-          if (currentNovels.some((n) => n.title === file.name.replace(/\.txt$/i, ''))) {
-            toast.error(`"${file.name}" 已存在，跳过`);
-            continue;
-          }
-          const novel = await parseTxtFile(file);
-          addNovel(novel);
-
-          // 同时保存到本地 data/novels/
-          await saveNovelToServer({
-            id: novel.id,
-            title: novel.title,
-            fullText: novel.fullText,
-            chunks: novel.chunks,
-          });
-        }
-      } catch (err) {
-        toast.error(`文件解析失败: ${err instanceof Error ? err.message : '未知错误'}`);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [addNovel],
-  );
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDragging(false);
-      handleFiles(e.dataTransfer.files);
-    },
-    [handleFiles],
-  );
-
-  const handleRemoveNovel = useCallback(
-    async (id: string) => {
-      removeNovel(id);
-      try {
-        const res = await fetch('/api/novels/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id }),
-        });
-        if (!res.ok) {
-          console.error('Failed to delete novel from server:', res.status);
-        }
-      } catch (err) {
-        console.error('Failed to delete novel from server:', err);
-      }
-    },
-    [removeNovel],
-  );
-
-  const navItems: { key: ActiveView; label: string; icon: typeof Sparkles }[] = [
-    { key: 'analyze', label: '风格分析', icon: Sparkles },
-    { key: 'write', label: '风格仿写', icon: PenTool },
+  const navItems: { key: ActiveView; label: string; icon: typeof Library }[] = [
+    { key: 'source-library', label: '素材库', icon: Library },
+    { key: 'writing-project', label: '写作项目', icon: PenTool },
+    { key: 'layer-generation', label: '层级规划', icon: Layers },
+    { key: 'chapter-generation', label: '章节生成', icon: BookOpen },
   ];
 
   return (
@@ -118,96 +39,18 @@ export function Sidebar() {
           </div>
         </div>
 
-        {/* 导入区 */}
-        <div className="px-4 pt-4 pb-2">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-            导入小说
-          </p>
-
-          {/* 拖拽上传 */}
-          <label
-            onDrop={handleDrop}
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            className={`
-              flex flex-col items-center justify-center gap-2
-              w-full h-20 rounded-lg border-2 border-dashed cursor-pointer
-              transition-all duration-200
-              ${isDragging
-                ? 'border-primary bg-primary/10'
-                : 'border-border hover:border-primary/50 bg-background/50'
-              }
-              ${isLoading ? 'pointer-events-none opacity-50' : ''}
-            `}
-          >
-            <input
-              type="file"
-              accept=".txt"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files) handleFiles(e.target.files);
-                e.target.value = '';
-              }}
-            />
-            <Upload className={`w-4 h-4 ${isDragging ? 'text-primary' : 'text-muted-foreground'}`} />
-            <span className="text-xs text-muted-foreground">
-              {isLoading ? '解析中...' : '拖拽或点击上传 .txt'}
-            </span>
-          </label>
-        </div>
-
-        {/* 文件列表 */}
-        <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1 scrollbar-none">
-          {novels.map((novel) => (
-            <div
-              key={novel.id}
-              className="flex items-center gap-2 px-3 py-2 rounded-md group hover:bg-sidebar-accent transition-colors"
-            >
-              <FileText className="w-4 h-4 text-primary shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-foreground truncate leading-tight">
-                  《{novel.title}》
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {formatCharCount(novel.totalChars)}
-                  {novel.chunks?.length ? ` · ${novel.chunks.length}块` : ''}
-                </p>
-              </div>
-              <button
-                onClick={() => handleRemoveNovel(novel.id)}
-                className="text-muted-foreground/50 hover:text-destructive transition-colors opacity-0 group-hover:opacity-100 shrink-0"
-                title="移除"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-
-          {novels.length === 0 && (
-            <p className="text-xs text-muted-foreground/60 text-center py-4">
-              尚未导入小说
-            </p>
-          )}
-        </div>
-
-        {/* 分割线 */}
-        <div className="border-t border-sidebar-border" />
-
         {/* 导航 */}
-        <nav className="px-3 py-2 space-y-0.5">
+        <nav className="px-3 py-4 space-y-0.5">
           {navItems.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setActiveView(key)}
-              disabled={key === 'write' && !analysisReport}
               className={`
                 w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors
                 ${activeView === key
                   ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
                   : 'text-foreground/70 hover:bg-sidebar-accent/60 hover:text-foreground'
                 }
-                ${key === 'write' && !analysisReport ? 'opacity-40 cursor-not-allowed' : ''}
               `}
             >
               <Icon className="w-4 h-4" />

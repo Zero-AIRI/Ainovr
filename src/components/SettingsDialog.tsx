@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAppStore } from '@/lib/store';
+import { useSettingsStore } from '@/lib/store/settings';
 import {
   Dialog,
   DialogContent,
@@ -24,11 +24,11 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const storeApiKey = useAppStore((s) => s.apiKey);
-  const storeModel = useAppStore((s) => s.model);
-  const storeBaseURL = useAppStore((s) => s.baseURL);
-  const storeMaxContextTokens = useAppStore((s) => s.maxContextTokens);
-  const setAISettings = useAppStore((s) => s.setAISettings);
+  const storeApiKey = useSettingsStore((s) => s.apiKey);
+  const storeModel = useSettingsStore((s) => s.model);
+  const storeBaseURL = useSettingsStore((s) => s.baseURL);
+  const storeMaxContextTokens = useSettingsStore((s) => s.maxContextTokens);
+  const setAISettings = useSettingsStore((s) => s.setAISettings);
 
   // 本地编辑状态
   const [apiKey, setApiKey] = useState('');

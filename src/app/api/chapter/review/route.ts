@@ -1,38 +1,28 @@
 // ============================================
-// POST /api/analyze — 流式风格分析接口
+// POST /api/chapter/review — 章节自动审查（5维度）
 // ============================================
 
 import { chatCompletionStream } from '@/lib/ai/providers';
-import { buildAnalyzeMessages, buildSupplementMessages } from '@/lib/ai/analyze-prompt';
+import { buildChapterReviewMessages } from '@/lib/ai/prompts';
 import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const {
-      novelTexts,
-      previousReport,
-      apiKey,
-      model,
-      baseURL,
-    }: {
-      novelTexts: string[];
-      previousReport?: string;
-      apiKey: string;
-      model: string;
-      baseURL: string;
-    } = body;
+    const { chapterContent, styleGuide, chapterTask, apiKey, model, baseURL } = body;
 
-    if (!novelTexts?.length) {
-      return new Response(JSON.stringify({ error: '请上传至少一本小说' }), { status: 400 });
-    }
     if (!apiKey) {
       return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
     }
+    if (!chapterContent) {
+      return new Response(JSON.stringify({ error: '缺少章节内容' }), { status: 400 });
+    }
 
-    const { systemPrompt, userMessage } = previousReport
-      ? buildSupplementMessages(novelTexts.join('\n\n'), previousReport)
-      : buildAnalyzeMessages(novelTexts);
+    const { systemPrompt, userMessage } = buildChapterReviewMessages(
+      chapterContent,
+      styleGuide ?? '',
+      chapterTask ?? '',
+    );
 
     const stream = chatCompletionStream(
       { apiKey, model: model || DEFAULT_MODEL, baseURL: baseURL || DEFAULT_BASE_URL },
@@ -43,8 +33,8 @@ export async function POST(req: Request) {
       headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' },
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : '分析失败';
-    console.error('分析接口错误:', error);
+    const message = error instanceof Error ? error.message : '审查失败';
+    console.error('章节审查错误:', error);
     return new Response(JSON.stringify({ error: message }), { status: 500 });
   }
 }
