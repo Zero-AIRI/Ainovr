@@ -4,21 +4,18 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ParsedNovel, AIProviderType, AppState, ActiveView, CustomProvider, ChatMessage, ImportConfig } from '@/types';
+import type { ParsedNovel, AppState, ActiveView, ChatMessage, ImportConfig } from '@/types';
 import { saveNovel, loadAllNovels, removeNovel as idbRemoveNovel, clearAllNovels as idbClearNovels } from '@/lib/sync/idb-helpers';
 import { cleanNovelText } from '@/lib/text-cleaner';
-import { smartSample, DEFAULT_IMPORT_CONFIG } from '@/lib/file-parser';
+import { chunkText, DEFAULT_MAX_CHUNK_SIZE } from '@/lib/chunker';
+import { DEFAULT_IMPORT_CONFIG, DEFAULT_CLEANING_CONFIG } from '@/lib/file-parser';
 import { saveNovelToServer } from '@/lib/utils';
 
 /** 深度克隆 ImportConfig，防止共享引用污染模块常量 */
 function cloneImportConfig(config: ImportConfig): ImportConfig {
   return {
     cleaning: { ...config.cleaning, enabledSteps: [...config.cleaning.enabledSteps] },
-    sampling: {
-      ...config.sampling,
-      chapter: { ...config.sampling.chapter },
-      fixedLength: { ...config.sampling.fixedLength },
-    },
+    maxChunkSize: config.maxChunkSize,
   };
 }
 
@@ -39,18 +36,14 @@ export const useAppStore = create<AppState>()(
       writeResult: null,
       isWriting: false,
 
-      // AI 设置
-      providerType: 'deepseek' as AIProviderType,
+      // API 设置
       apiKey: '',
       model: 'deepseek-chat',
-      baseURL: '',
+      baseURL: 'https://api.deepseek.com',
 
-      // DeepSeek 思考模式
+      // 思考模式
       thinkingMode: false,
       thinkingEffort: 'high' as const,
-
-      // 自定义供应商列表
-      customProviders: [] as CustomProvider[],
 
       // 聊天记录
       chatMessages: [] as ChatMessage[],
@@ -58,26 +51,30 @@ export const useAppStore = create<AppState>()(
       // 文本处理配置（深克隆默认值，防止共享引用）
       importConfig: cloneImportConfig(DEFAULT_IMPORT_CONFIG),
 
-      // 文件同步状态
-      syncStatus: 'no-folder' as const,
-      syncError: null,
-      folderName: null,
+      // 问答选中的书籍 ID
+      selectedBookIds: [] as string[],
 
       // Actions
       setActiveView: (view: ActiveView) => set({ activeView: view }),
 
       addNovel: (novel: ParsedNovel) => {
-        set((state) => ({ novels: [...state.novels, novel] }));
+        set((state) => ({
+          novels: [...state.novels, novel],
+          selectedBookIds: [...state.selectedBookIds, novel.id],
+        }));
         saveNovel(novel).catch(console.error);
       },
 
       removeNovel: (id: string) => {
-        set((state) => ({ novels: state.novels.filter((n) => n.id !== id) }));
+        set((state) => ({
+          novels: state.novels.filter((n) => n.id !== id),
+          selectedBookIds: state.selectedBookIds.filter((nid) => nid !== id),
+        }));
         idbRemoveNovel(id).catch(console.error);
       },
 
       clearNovels: () => {
-        set({ novels: [], analysisReport: null });
+        set({ novels: [], analysisReport: null, selectedBookIds: [] });
         idbClearNovels().catch(console.error);
       },
 
@@ -93,15 +90,12 @@ export const useAppStore = create<AppState>()(
 
       setAISettings: (settings) => set(settings),
 
-      setCustomProviders: (providers: CustomProvider[]) =>
-        set({ customProviders: providers }),
-
       // 文本处理
       updateImportConfig: (partial: Partial<ImportConfig>) => {
         set((state) => ({
           importConfig: {
             cleaning: { ...state.importConfig.cleaning, ...(partial.cleaning ?? {}) },
-            sampling: { ...state.importConfig.sampling, ...(partial.sampling ?? {}) },
+            maxChunkSize: partial.maxChunkSize ?? state.importConfig.maxChunkSize,
           },
         }));
       },
@@ -115,12 +109,12 @@ export const useAppStore = create<AppState>()(
         }
 
         const cleaned = cleanNovelText(novel.rawText, state.importConfig.cleaning);
-        const sampleText = smartSample(cleaned, state.importConfig.sampling);
+        const chunks = chunkText(novel.id, cleaned, state.importConfig.maxChunkSize);
 
         const updated: ParsedNovel = {
           ...novel,
           fullText: cleaned,
-          sampleText,
+          chunks,
           totalChars: cleaned.length,
           importConfig: cloneImportConfig(state.importConfig),
         };
@@ -133,13 +127,12 @@ export const useAppStore = create<AppState>()(
         }));
 
         // 持久化到本地 data/novels/
-        await saveNovelToServer({ id: updated.id, title: updated.title, fullText: updated.fullText });
+        await saveNovelToServer({ id: updated.id, title: updated.title, fullText: updated.fullText, chunks: updated.chunks });
       },
 
       reprocessAllNovels: async () => {
         const state = get();
         const novelsToReprocess = state.novels.filter((n) => n.rawText);
-        // 并行处理独立的小说
         await Promise.allSettled(
           novelsToReprocess.map((n) => get().reprocessNovel(n.id)),
         );
@@ -154,22 +147,42 @@ export const useAppStore = create<AppState>()(
 
       clearChatMessages: () => set({ chatMessages: [] }),
 
-      // 文件同步
-      setSyncStatus: (status) => set({ syncStatus: status }),
-      setSyncError: (error) => set({ syncError: error }),
-      setFolderName: (name) => set({ folderName: name }),
+      // 书籍选择
+      setSelectedBookIds: (ids: string[]) => set({ selectedBookIds: ids }),
+
+      toggleSelectedBook: (novelId: string) => {
+        set((state) => ({
+          selectedBookIds: state.selectedBookIds.includes(novelId)
+            ? state.selectedBookIds.filter((id) => id !== novelId)
+            : [...state.selectedBookIds, novelId],
+        }));
+      },
 
       // 从 IndexedDB 恢复小说数据（启动时调用），同时迁移旧数据
       loadNovelsFromIDB: async () => {
         try {
           const novels = await loadAllNovels();
-          // 旧数据迁移：填充缺失的 rawText / importConfig 字段
-          const migrated = novels.map((n) => ({
-            ...n,
-            rawText: n.rawText ?? null,
-            importConfig: n.importConfig ?? null,
+          const migrated = await Promise.all(novels.map(async (n) => {
+            // 填充缺失的 rawText / importConfig 字段
+            let updated = {
+              ...n,
+              rawText: n.rawText ?? null,
+              importConfig: n.importConfig ?? null,
+            };
+
+            // 旧数据迁移：有 sampleText 但没有 chunks → 重新分块
+            if ((!updated.chunks || updated.chunks.length === 0) && updated.fullText) {
+              updated.chunks = chunkText(updated.id, updated.fullText, DEFAULT_MAX_CHUNK_SIZE);
+              // 持久化迁移结果
+              await saveNovel(updated);
+            }
+
+            return updated;
           }));
-          set({ novels: migrated });
+
+          // 自动选中所有书籍
+          const allIds = migrated.map((n) => n.id);
+          set({ novels: migrated, selectedBookIds: allIds });
         } catch (err) {
           console.error('从 IndexedDB 恢复小说失败:', err);
         }
@@ -177,29 +190,46 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'ainovr-storage',
-      version: 2,
+      version: 4,
       migrate: (persisted, version) => {
-        if (version <= 1) {
-          const state = persisted as Record<string, unknown>;
-          return {
-            ...state,
-            thinkingMode: (state as Record<string, unknown>).thinkingMode ?? false,
-            thinkingEffort: (state as Record<string, unknown>).thinkingEffort ?? 'high',
-            customProviders: (state as Record<string, unknown>).customProviders ?? [],
-            importConfig: (state as Record<string, unknown>).importConfig ?? undefined,
-          };
+        let state = persisted as Record<string, unknown>;
+        if (version <= 2) {
+          // 旧版本迁移：添加缺失字段
+          if (!state.selectedBookIds) {
+            state = { ...state, selectedBookIds: [] };
+          }
+          const ic = state.importConfig as Record<string, unknown> | undefined;
+          if (ic) {
+            if ('sampling' in ic) delete ic.sampling;
+            if (!('maxChunkSize' in ic) || ic.maxChunkSize == null) {
+              (ic as Record<string, unknown>).maxChunkSize = DEFAULT_MAX_CHUNK_SIZE;
+            }
+          } else {
+            state = { ...state, importConfig: { cleaning: DEFAULT_CLEANING_CONFIG, maxChunkSize: DEFAULT_MAX_CHUNK_SIZE } };
+          }
+          // 设置默认 baseURL
+          if (!state.baseURL) {
+            state = { ...state, baseURL: 'https://api.deepseek.com', model: state.model || 'deepseek-v4-flash' };
+          }
         }
-        return persisted as Record<string, unknown>;
+        if (version <= 3) {
+          // v3 → v4：移除 providerType / customProviders
+          delete (state as Record<string, unknown>).providerType;
+          delete (state as Record<string, unknown>).customProviders;
+          if (!state.baseURL) {
+            state = { ...state, baseURL: 'https://api.deepseek.com' };
+          }
+        }
+        return state as Record<string, unknown>;
       },
       partialize: (state) => ({
-        providerType: state.providerType,
         apiKey: state.apiKey,
         model: state.model,
         baseURL: state.baseURL,
         thinkingMode: state.thinkingMode,
         thinkingEffort: state.thinkingEffort,
-        customProviders: state.customProviders,
         importConfig: state.importConfig,
+        selectedBookIds: state.selectedBookIds,
       }),
     }
   )

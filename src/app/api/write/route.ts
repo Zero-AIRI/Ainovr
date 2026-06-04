@@ -2,30 +2,22 @@
 // POST /api/write — 流式仿写接口
 // ============================================
 
-import { streamText } from 'ai';
-import { createAIModel, buildThinkingOptions } from '@/lib/ai/providers';
+import { chatCompletionStream } from '@/lib/ai/providers';
 import { buildWriteMessages, buildContinueMessages } from '@/lib/ai/write-prompt';
-import type { AIProviderType, WriteLength, CustomProvider, ThinkingEffort } from '@/types';
-import { needsApiKey } from '@/types';
+import type { WriteLength, ThinkingEffort } from '@/types';
 
 interface CommonParams {
-  provider: AIProviderType;
   apiKey: string;
   model: string;
-  baseURL?: string;
+  baseURL: string;
   thinkingMode?: boolean;
   thinkingEffort?: ThinkingEffort;
-  customProviders?: CustomProvider[];
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-
-    if (body.mode === 'continue') {
-      return handleContinue(body);
-    }
-
+    if (body.mode === 'continue') return handleContinue(body);
     return handleWrite(body);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '仿写失败';
@@ -41,36 +33,18 @@ async function handleWrite(body: {
   synopsis: string;
   extraRequirements?: string;
 } & CommonParams) {
-  const {
-    analysisReport, genre, length, synopsis, extraRequirements,
-    provider, apiKey, model, baseURL,
-    thinkingMode, thinkingEffort, customProviders,
-  } = body;
+  const { analysisReport, genre, length, synopsis, extraRequirements, apiKey, model, baseURL, thinkingMode, thinkingEffort } = body;
+  if (!apiKey) return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
 
-  if (needsApiKey(provider) && !apiKey) {
-    return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
-  }
-
-  const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
-  const { systemPrompt, userMessage } = buildWriteMessages(
-    analysisReport, genre, length, synopsis, extraRequirements,
+  const { systemPrompt, userMessage } = buildWriteMessages(analysisReport, genre, length, synopsis, extraRequirements);
+  const stream = chatCompletionStream(
+    { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
+    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 8192, thinkingMode, thinkingEffort },
   );
 
-  const providerOptions = buildThinkingOptions(
-    provider,
-    thinkingMode ?? false,
-    thinkingEffort ?? 'high',
-  );
-
-  const result = streamText({
-    model: aiModel,
-    system: systemPrompt,
-    prompt: userMessage,
-    maxOutputTokens: 8192,
-    ...(providerOptions && { providerOptions }),
+  return new Response(stream, {
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' },
   });
-
-  return result.toTextStreamResponse();
 }
 
 async function handleContinue(body: {
@@ -78,34 +52,16 @@ async function handleContinue(body: {
   existingText: string;
   extraHint?: string;
 } & CommonParams) {
-  const {
-    analysisReport, existingText, extraHint,
-    provider, apiKey, model, baseURL,
-    thinkingMode, thinkingEffort, customProviders,
-  } = body;
+  const { analysisReport, existingText, extraHint, apiKey, model, baseURL, thinkingMode, thinkingEffort } = body;
+  if (!apiKey) return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
 
-  if (needsApiKey(provider) && !apiKey) {
-    return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
-  }
-
-  const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
-  const { systemPrompt, userMessage } = buildContinueMessages(
-    analysisReport, existingText, extraHint,
+  const { systemPrompt, userMessage } = buildContinueMessages(analysisReport, existingText, extraHint);
+  const stream = chatCompletionStream(
+    { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
+    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 4096, thinkingMode, thinkingEffort },
   );
 
-  const providerOptions = buildThinkingOptions(
-    provider,
-    thinkingMode ?? false,
-    thinkingEffort ?? 'high',
-  );
-
-  const result = streamText({
-    model: aiModel,
-    system: systemPrompt,
-    prompt: userMessage,
-    maxOutputTokens: 4096,
-    ...(providerOptions && { providerOptions }),
+  return new Response(stream, {
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' },
   });
-
-  return result.toTextStreamResponse();
 }

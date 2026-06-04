@@ -11,7 +11,6 @@ import { Button } from '@/components/ui/button';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
-import { needsApiKey } from '@/types';
 
 export function AnalyzeView() {
   const novels = useAppStore((s) => s.novels);
@@ -20,13 +19,11 @@ export function AnalyzeView() {
   const setAnalysisReport = useAppStore((s) => s.setAnalysisReport);
   const setIsAnalyzing = useAppStore((s) => s.setIsAnalyzing);
   const setActiveView = useAppStore((s) => s.setActiveView);
-  const providerType = useAppStore((s) => s.providerType);
   const apiKey = useAppStore((s) => s.apiKey);
   const model = useAppStore((s) => s.model);
   const baseURL = useAppStore((s) => s.baseURL);
   const thinkingMode = useAppStore((s) => s.thinkingMode);
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
-  const customProviders = useAppStore((s) => s.customProviders);
 
   const { streamContent, isStreaming, error, startFetch, setStreamContent } = useStreamingFetch();
 
@@ -50,19 +47,17 @@ export function AnalyzeView() {
   }, [error]);
 
   const startAnalysis = async () => {
-    if (!novels.length || (needsApiKey(providerType) && !apiKey)) return;
+    if (!novels.length || !apiKey) return;
 
     setAnalysisReport(null);
 
     const fullText = await startFetch('/api/analyze', {
-      novelTexts: novels.map((n) => n.sampleText),
-      provider: providerType,
+      novelTexts: novels.map((n) => n.fullText),
       apiKey,
       model,
-      baseURL: baseURL || undefined,
+      baseURL,
       thinkingMode,
       thinkingEffort,
-      customProviders,
     });
 
     if (fullText) {
@@ -71,7 +66,7 @@ export function AnalyzeView() {
   };
 
   const hasReport = (analysisReport || '').trim().length > 0;
-  const noApiKey = needsApiKey(providerType) && !apiKey.trim();
+  const noApiKey = !apiKey.trim();
   const noNovels = novels.length === 0;
 
   return (

@@ -22,7 +22,7 @@ import {
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
-import { needsApiKey, type WriteLength } from '@/types';
+import type { WriteLength } from '@/types';
 
 const GENRE_OPTIONS = [
   '玄幻', '仙侠', '都市', '历史', '科幻',
@@ -39,13 +39,11 @@ const LENGTH_OPTIONS: { value: WriteLength; label: string; desc: string }[] = [
 export function WriteView() {
   const novels = useAppStore((s) => s.novels);
   const analysisReport = useAppStore((s) => s.analysisReport);
-  const providerType = useAppStore((s) => s.providerType);
   const apiKey = useAppStore((s) => s.apiKey);
   const model = useAppStore((s) => s.model);
   const baseURL = useAppStore((s) => s.baseURL);
   const thinkingMode = useAppStore((s) => s.thinkingMode);
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
-  const customProviders = useAppStore((s) => s.customProviders);
   const isWriting = useAppStore((s) => s.isWriting);
   const writeResult = useAppStore((s) => s.writeResult);
   const setIsWriting = useAppStore((s) => s.setIsWriting);
@@ -78,18 +76,14 @@ export function WriteView() {
     }
   }, [error]);
 
-  // ollama/custom 不强制要求 apiKey
-  const canWrite = synopsis.trim().length > 0 && !!analysisReport && (!needsApiKey(providerType) || !!apiKey);
+  const canWrite = synopsis.trim().length > 0 && !!analysisReport && !!apiKey;
 
-  // 构造通用 AI 参数（仅在请求时构建，避免作为 useCallback 依赖导致每次 render 重建）
   const buildAIBody = () => ({
-    provider: providerType,
     apiKey,
     model,
-    baseURL: baseURL || undefined,
+    baseURL,
     thinkingMode,
     thinkingEffort,
-    customProviders,
   });
 
   const startWriting = async () => {

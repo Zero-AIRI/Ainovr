@@ -2,61 +2,45 @@
 // POST /api/analyze — 流式风格分析接口
 // ============================================
 
-import { streamText } from 'ai';
-import { createAIModel, buildThinkingOptions } from '@/lib/ai/providers';
+import { chatCompletionStream } from '@/lib/ai/providers';
 import { buildAnalyzeMessages } from '@/lib/ai/analyze-prompt';
-import type { AIProviderType, CustomProvider, ThinkingEffort } from '@/types';
-import { needsApiKey } from '@/types';
+import type { ThinkingEffort } from '@/types';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const {
       novelTexts,
-      provider,
       apiKey,
       model,
       baseURL,
       thinkingMode,
       thinkingEffort,
-      customProviders,
     }: {
       novelTexts: string[];
-      provider: AIProviderType;
       apiKey: string;
       model: string;
-      baseURL?: string;
+      baseURL: string;
       thinkingMode?: boolean;
       thinkingEffort?: ThinkingEffort;
-      customProviders?: CustomProvider[];
     } = body;
 
     if (!novelTexts?.length) {
       return new Response(JSON.stringify({ error: '请上传至少一本小说' }), { status: 400 });
     }
-
-    if (needsApiKey(provider) && !apiKey) {
+    if (!apiKey) {
       return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
     }
 
-    const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
     const { systemPrompt, userMessage } = buildAnalyzeMessages(novelTexts);
-
-    const providerOptions = buildThinkingOptions(
-      provider,
-      thinkingMode ?? false,
-      thinkingEffort ?? 'high',
+    const stream = chatCompletionStream(
+      { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
+      { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 4096, thinkingMode, thinkingEffort },
     );
 
-    const result = streamText({
-      model: aiModel,
-      system: systemPrompt,
-      prompt: userMessage,
-      maxOutputTokens: 4096,
-      ...(providerOptions && { providerOptions }),
+    return new Response(stream, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' },
     });
-
-    return result.toTextStreamResponse();
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '分析失败';
     console.error('分析接口错误:', error);

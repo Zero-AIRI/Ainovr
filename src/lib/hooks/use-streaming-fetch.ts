@@ -59,6 +59,11 @@ export function useStreamingFetch() {
         setStreamContent(fullText);
       }
 
+      // 空响应处理：如果流结束但没有内容，可能是 API 调用失败
+      if (!fullText.trim()) {
+        throw new Error('模型返回了空响应，请检查 API Key 或模型配置');
+      }
+
       return fullText;
     } catch (err: unknown) {
       // 主动 abort 不算错误

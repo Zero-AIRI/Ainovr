@@ -23,7 +23,7 @@ import { saveNovelToServer } from '@/lib/utils';
 import type { ActiveView } from '@/types';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { ImportSettingsDialog } from '@/components/ImportSettingsDialog';
-import { SyncControls } from '@/components/SyncControls';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** 文件大小限制：20 MB */
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -35,6 +35,8 @@ export function Sidebar() {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
   const analysisReport = useAppStore((s) => s.analysisReport);
+  const selectedBookIds = useAppStore((s) => s.selectedBookIds);
+  const toggleSelectedBook = useAppStore((s) => s.toggleSelectedBook);
 
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -67,7 +69,12 @@ export function Sidebar() {
           addNovel(novel);
 
           // 同时保存到本地 data/novels/
-          await saveNovelToServer({ id: novel.id, title: novel.title, fullText: novel.fullText });
+          await saveNovelToServer({
+            id: novel.id,
+            title: novel.title,
+            fullText: novel.fullText,
+            chunks: novel.chunks,
+          });
         }
       } catch (err) {
         toast.error(`文件解析失败: ${err instanceof Error ? err.message : '未知错误'}`);
@@ -88,13 +95,13 @@ export function Sidebar() {
   );
 
   const handleRemoveNovel = useCallback(
-    async (id: string, title: string) => {
+    async (id: string) => {
       removeNovel(id);
       try {
         const res = await fetch('/api/novels/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title }),
+          body: JSON.stringify({ id }),
         });
         if (!res.ok) {
           console.error('Failed to delete novel from server:', res.status);
@@ -122,9 +129,6 @@ export function Sidebar() {
             <span className="text-lg font-bold text-foreground tracking-tight">Ainovr</span>
           </div>
         </div>
-
-        {/* 文件同步 */}
-        <SyncControls />
 
         {/* 导入区 */}
         <div className="px-4 pt-4 pb-2">
@@ -180,19 +184,28 @@ export function Sidebar() {
         {/* 文件列表 */}
         <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1 scrollbar-none">
           {novels.map((novel) => (
-            <div
+            <label
               key={novel.id}
-              className="flex items-center gap-2 px-3 py-2 rounded-md group hover:bg-sidebar-accent transition-colors"
+              className="flex items-center gap-2 px-3 py-2 rounded-md group hover:bg-sidebar-accent transition-colors cursor-pointer"
             >
+              <Checkbox
+                checked={selectedBookIds.includes(novel.id)}
+                onCheckedChange={() => toggleSelectedBook(novel.id)}
+                className="shrink-0"
+              />
               <FileText className="w-4 h-4 text-primary shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-foreground truncate leading-tight">
                   《{novel.title}》
                 </p>
-                <p className="text-xs text-muted-foreground">{formatCharCount(novel.totalChars)}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatCharCount(novel.totalChars)}
+                  {novel.chunks?.length ? ` · ${novel.chunks.length}块` : ''}
+                </p>
               </div>
               <button
-                onClick={() => {
+                onClick={(e) => {
+                  e.preventDefault();
                   setReprocessTarget(novel.id);
                   setImportSettingsOpen(true);
                 }}
@@ -202,13 +215,16 @@ export function Sidebar() {
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => handleRemoveNovel(novel.id, novel.title)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleRemoveNovel(novel.id);
+                }}
                 className="text-muted-foreground/50 hover:text-destructive transition-colors opacity-0 group-hover:opacity-100 shrink-0"
                 title="移除"
               >
                 ✕
               </button>
-            </div>
+            </label>
           ))}
 
           {novels.length === 0 && (

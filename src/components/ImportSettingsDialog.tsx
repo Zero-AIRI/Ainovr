@@ -1,5 +1,5 @@
 // ============================================
-// 导入设置弹窗 — 清洗预设 + 采样策略
+// 导入设置弹窗 — 清洗预设 + 分块大小
 // ============================================
 
 'use client';
@@ -10,7 +10,6 @@ import { toast } from 'sonner';
 import type {
   CleaningPreset,
   CleaningStepId,
-  SamplingStrategy,
   ImportConfig,
 } from '@/types';
 import { ALL_CLEANING_STEPS, resolveCleaningSteps } from '@/lib/text-cleaner';
@@ -35,7 +34,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -61,19 +59,12 @@ const STEP_LABELS: Record<CleaningStepId, string> = {
   blankLines: '空行整理',
 };
 
-const PRESET_LABELS: Record<CleaningPreset, string> = {
-  aggressive: '激进 — 清理全部 10 个步骤',
-  standard: '标准 — 跳过广告和作者碎碎念',
-  light: '轻度 — 仅编码、标点、空行',
-  none: '手动 — 自行选择步骤',
-};
-
-const STRATEGY_LABELS: Record<SamplingStrategy, string> = {
-  full: '全文保留',
-  chapter: '章节采样',
-  fixedLength: '固定长度采样',
-  customLimit: '自定义字数上限',
-};
+const PRESET_OPTIONS: { value: CleaningPreset; label: string }[] = [
+  { value: 'aggressive', label: '激进 — 清理全部 10 个步骤' },
+  { value: 'standard', label: '标准 — 跳过广告和作者碎碎念' },
+  { value: 'light', label: '轻度 — 仅编码、标点、空行' },
+  { value: 'none', label: '手动 — 自行选择步骤' },
+];
 
 export function ImportSettingsDialog({
   open,
@@ -94,39 +85,16 @@ export function ImportSettingsDialog({
   const [enabledSteps, setEnabledSteps] = useState<CleaningStepId[]>(
     DEFAULT_IMPORT_CONFIG.cleaning.enabledSteps,
   );
-  const [samplingStrategy, setSamplingStrategy] = useState<SamplingStrategy>(
-    DEFAULT_IMPORT_CONFIG.sampling.strategy,
-  );
-  const [headCount, setHeadCount] = useState(DEFAULT_IMPORT_CONFIG.sampling.chapter.headCount);
-  const [midCount, setMidCount] = useState(DEFAULT_IMPORT_CONFIG.sampling.chapter.midCount);
-  const [tailCount, setTailCount] = useState(DEFAULT_IMPORT_CONFIG.sampling.chapter.tailCount);
-  const [randomCount, setRandomCount] = useState(DEFAULT_IMPORT_CONFIG.sampling.chapter.randomCount);
-  const [headRatio, setHeadRatio] = useState(DEFAULT_IMPORT_CONFIG.sampling.fixedLength.headRatio);
-  const [midRatio, setMidRatio] = useState(DEFAULT_IMPORT_CONFIG.sampling.fixedLength.midRatio);
-  const [tailRatio, setTailRatio] = useState(DEFAULT_IMPORT_CONFIG.sampling.fixedLength.tailRatio);
-  const [customCharLimit, setCustomCharLimit] = useState(
-    DEFAULT_IMPORT_CONFIG.sampling.customCharLimit,
-  );
-  const [maxCharsOverride, setMaxCharsOverride] = useState<number | null>(
-    DEFAULT_IMPORT_CONFIG.sampling.maxCharsOverride,
-  );
+  const [maxChunkSize, setMaxChunkSize] = useState(DEFAULT_IMPORT_CONFIG.maxChunkSize);
 
   const [isReprocessing, setIsReprocessing] = useState(false);
 
   /** 将 ImportConfig 同步到本地状态 */
-  const loadConfig = (src: ImportConfig) => {
-    setCleaningPreset(src.cleaning.preset);
-    setEnabledSteps(src.cleaning.enabledSteps);
-    setSamplingStrategy(src.sampling.strategy);
-    setHeadCount(src.sampling.chapter.headCount);
-    setMidCount(src.sampling.chapter.midCount);
-    setTailCount(src.sampling.chapter.tailCount);
-    setRandomCount(src.sampling.chapter.randomCount);
-    setHeadRatio(src.sampling.fixedLength.headRatio);
-    setMidRatio(src.sampling.fixedLength.midRatio);
-    setTailRatio(src.sampling.fixedLength.tailRatio);
-    setCustomCharLimit(src.sampling.customCharLimit);
-    setMaxCharsOverride(src.sampling.maxCharsOverride);
+  const loadConfig = (src: ImportConfig | null | undefined) => {
+    const safe = src ?? DEFAULT_IMPORT_CONFIG;
+    setCleaningPreset(safe.cleaning?.preset ?? DEFAULT_IMPORT_CONFIG.cleaning.preset);
+    setEnabledSteps(safe.cleaning?.enabledSteps ?? []);
+    setMaxChunkSize(safe.maxChunkSize ?? DEFAULT_IMPORT_CONFIG.maxChunkSize);
     setIsReprocessing(false);
   };
 
@@ -136,7 +104,7 @@ export function ImportSettingsDialog({
 
     const src = novelId
       ? (novels.find((n) => n.id === novelId)?.importConfig ?? DEFAULT_IMPORT_CONFIG)
-      : storeImportConfig;
+      : (storeImportConfig ?? DEFAULT_IMPORT_CONFIG);
 
     loadConfig(src);
   }, [open, novelId, novels, storeImportConfig]);
@@ -147,13 +115,7 @@ export function ImportSettingsDialog({
       preset: cleaningPreset,
       enabledSteps: cleaningPreset === 'none' ? enabledSteps : [],
     },
-    sampling: {
-      strategy: samplingStrategy,
-      chapter: { headCount, midCount, tailCount, randomCount },
-      fixedLength: { headRatio, midRatio, tailRatio },
-      customCharLimit,
-      maxCharsOverride,
-    },
+    maxChunkSize,
   });
 
   /** 切换手动步骤 */
@@ -198,7 +160,6 @@ export function ImportSettingsDialog({
     }
   };
 
-  // Badge 展示用：非 none 预设时从 resolveCleaningSteps 获取激活步骤
   const activeSteps = useMemo(
     () =>
       cleaningPreset === 'none'
@@ -232,17 +193,18 @@ export function ImportSettingsDialog({
                 <Label className="text-xs">预设方案</Label>
                 <Select
                   value={cleaningPreset}
-                  onValueChange={(v) => setCleaningPreset(v as CleaningPreset)}
+                  onValueChange={(v) => {
+                    if (!v) return;
+                    setCleaningPreset(v as CleaningPreset);
+                  }}
                 >
                   <SelectTrigger className="h-9 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {(
-                      Object.entries(PRESET_LABELS) as [CleaningPreset, string][]
-                    ).map(([value, label]) => (
-                      <SelectItem key={value} value={value}>
-                        {label}
+                    {PRESET_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -289,174 +251,30 @@ export function ImportSettingsDialog({
 
             <Separator />
 
-            {/* ======== 采样配置 ======== */}
+            {/* ======== 分块配置 ======== */}
             <div className="space-y-3">
               <div>
-                <h4 className="text-sm font-semibold">采样配置</h4>
+                <h4 className="text-sm font-semibold">分块配置</h4>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  控制送入 AI 的文本长度和选取方式
+                  控制小说按章节分块后的每块最大字符数
                 </p>
               </div>
 
-              {/* 策略选择 */}
-              <div className="space-y-2">
-                <Label className="text-xs">采样策略</Label>
-                <Select
-                  value={samplingStrategy}
-                  onValueChange={(v) => setSamplingStrategy(v as SamplingStrategy)}
-                >
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(
-                      Object.entries(STRATEGY_LABELS) as [SamplingStrategy, string][]
-                    ).map(([value, label]) => (
-                      <SelectItem key={value} value={value}>
-                        {label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="space-y-2 rounded-lg border border-border p-3">
+                <Label className="text-xs">分块大小上限（字符）</Label>
+                <Input
+                  type="number"
+                  min={1000}
+                  max={50000}
+                  step={1000}
+                  value={maxChunkSize}
+                  onChange={(e) => setMaxChunkSize(safeInt(e.target.value, 8000))}
+                  className="h-8 text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  超过 {maxChunkSize.toLocaleString()} 字符的章节将在段落边界自动分割成更小的块
+                </p>
               </div>
-
-              {/* 章节采样参数 */}
-              {samplingStrategy === 'chapter' && (
-                <div className="grid grid-cols-2 gap-3 rounded-lg border border-border p-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">开头章节数</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      value={headCount}
-                      onChange={(e) => setHeadCount(safeInt(e.target.value, 3))}
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">中间章节数</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      value={midCount}
-                      onChange={(e) => setMidCount(safeInt(e.target.value, 3))}
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">结尾章节数</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      value={tailCount}
-                      onChange={(e) => setTailCount(safeInt(e.target.value, 3))}
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">随机章节数</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      value={randomCount}
-                      onChange={(e) => setRandomCount(safeInt(e.target.value, 2))}
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* 固定长度采样参数 */}
-              {samplingStrategy === 'fixedLength' && (
-                <div className="space-y-4 rounded-lg border border-border p-3">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">头部比例</Label>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {Math.round(headRatio * 100)}%
-                      </span>
-                    </div>
-                    <Slider
-                      value={[headRatio]}
-                      onValueChange={(v) => setHeadRatio(Array.isArray(v) ? v[0] : v)}
-                      min={0.05}
-                      max={0.7}
-                      step={0.05}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">中部比例</Label>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {Math.round(midRatio * 100)}%
-                      </span>
-                    </div>
-                    <Slider
-                      value={[midRatio]}
-                      onValueChange={(v) => setMidRatio(Array.isArray(v) ? v[0] : v)}
-                      min={0.05}
-                      max={0.5}
-                      step={0.05}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">尾部比例</Label>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {Math.round(tailRatio * 100)}%
-                      </span>
-                    </div>
-                    <Slider
-                      value={[tailRatio]}
-                      onValueChange={(v) => setTailRatio(Array.isArray(v) ? v[0] : v)}
-                      min={0.05}
-                      max={0.5}
-                      step={0.05}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    总比例: {Math.round((headRatio + midRatio + tailRatio) * 100)}%
-                    {headRatio + midRatio + tailRatio > 1.0 && (
-                      <span className="text-amber-500 ml-1">（将自动归一化）</span>
-                    )}
-                  </p>
-                </div>
-              )}
-
-              {/* 自定义字数上限参数 */}
-              {samplingStrategy === 'customLimit' && (
-                <div className="space-y-2 rounded-lg border border-border p-3">
-                  <Label className="text-xs">字数上限</Label>
-                  <Input
-                    type="number"
-                    min={1000}
-                    max={1000000}
-                    step={1000}
-                    value={customCharLimit}
-                    onChange={(e) => setCustomCharLimit(safeInt(e.target.value, 80000))}
-                    className="h-8 text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    超过 {customCharLimit.toLocaleString()} 字的部分将被截断
-                  </p>
-                </div>
-              )}
-
-              {/* 策略说明 */}
-              <p className="text-xs text-muted-foreground">
-                当前策略：{STRATEGY_LABELS[samplingStrategy]}
-                {samplingStrategy === 'full' && ' — 全文送入 AI（适合短篇）'}
-                {samplingStrategy === 'customLimit' &&
-                  ` — 上限 ${customCharLimit.toLocaleString()} 字`}
-                {samplingStrategy === 'chapter' &&
-                  ` — 开头${headCount}+中间${midCount}+结尾${tailCount}+随机${randomCount} 章`}
-                {samplingStrategy === 'fixedLength' &&
-                  ` — 头${Math.round(headRatio * 100)}% + 中${Math.round(midRatio * 100)}% + 尾${Math.round(tailRatio * 100)}%`}
-              </p>
             </div>
           </div>
         </ScrollArea>

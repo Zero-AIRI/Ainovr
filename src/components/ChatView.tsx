@@ -12,20 +12,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { StreamingText } from '@/components/StreamingText';
 import { useAppStore } from '@/lib/store';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
-import { needsApiKey } from '@/types';
-
 export function ChatView() {
   const novels = useAppStore((s) => s.novels);
-  const providerType = useAppStore((s) => s.providerType);
   const apiKey = useAppStore((s) => s.apiKey);
   const model = useAppStore((s) => s.model);
   const baseURL = useAppStore((s) => s.baseURL);
   const thinkingMode = useAppStore((s) => s.thinkingMode);
   const thinkingEffort = useAppStore((s) => s.thinkingEffort);
-  const customProviders = useAppStore((s) => s.customProviders);
   const chatMessages = useAppStore((s) => s.chatMessages);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const clearChatMessages = useAppStore((s) => s.clearChatMessages);
+  const selectedBookIds = useAppStore((s) => s.selectedBookIds);
 
   const [input, setInput] = useState('');
 
@@ -55,9 +52,11 @@ export function ChatView() {
     }
   }, [error]);
 
-  const noApiKey = needsApiKey(providerType) && !apiKey.trim();
+  const noApiKey = !apiKey.trim();
+  const selectedNovels = novels.filter((n) => selectedBookIds.includes(n.id));
   const noNovels = novels.length === 0;
-  const canSend = input.trim().length > 0 && !isStreaming && !noApiKey && !noNovels;
+  const noSelection = selectedNovels.length === 0;
+  const canSend = input.trim().length > 0 && !isStreaming && !noApiKey && !noSelection;
 
   const handleSend = useCallback(async () => {
     if (!canSend) return;
@@ -66,24 +65,34 @@ export function ChatView() {
     setInput('');
     addChatMessage({ role: 'user', content: question });
 
+    // 发送选中书籍的全部 chunks（带书名和章节标题）
+    const allChunks = selectedNovels.flatMap((n) =>
+      n.chunks.map((c) => ({
+        id: c.id,
+        novelId: c.novelId,
+        novelTitle: n.title,
+        index: c.index,
+        title: c.title,
+        content: c.content,
+        charCount: c.charCount,
+      })),
+    );
+
     const fullText = await startFetch('/api/chat', {
-      novelTexts: novels.map((n) => n.sampleText),
-      novelTitles: novels.map((n) => n.title),
+      chunks: allChunks,
       history: chatMessages,
       question,
-      provider: providerType,
       apiKey,
       model,
-      baseURL: baseURL || undefined,
+      baseURL,
       thinkingMode,
       thinkingEffort,
-      customProviders,
     });
 
     if (fullText) {
       addChatMessage({ role: 'assistant', content: fullText });
     }
-  }, [canSend, input, chatMessages, novels, providerType, apiKey, model, baseURL, thinkingMode, thinkingEffort, customProviders, startFetch, addChatMessage]);
+  }, [canSend, input, chatMessages, selectedNovels, apiKey, model, baseURL, thinkingMode, thinkingEffort, startFetch, addChatMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -102,7 +111,7 @@ export function ChatView() {
             {noNovels ? '请先在左侧导入小说文件' : '请先在设置中配置 API Key'}
           </p>
           <p className="text-xs text-muted-foreground/60">
-            导入小说后即可基于内容提问
+            {noNovels ? '导入小说后即可基于内容提问' : '请在左侧勾选要引用的小说'}
           </p>
         </div>
       </div>
@@ -116,7 +125,7 @@ export function ChatView() {
         <div>
           <h2 className="text-sm font-medium">小说问答</h2>
           <p className="text-xs text-muted-foreground">
-            基于 {novels.length} 本小说的内容回答
+            基于 {selectedNovels.length} 本小说的内容回答
           </p>
         </div>
         {chatMessages.length > 0 && (

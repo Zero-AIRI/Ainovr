@@ -12,13 +12,27 @@ export async function GET() {
   try {
     await fs.mkdir(NOVELS_DIR, { recursive: true });
 
-    const files = await fs.readdir(NOVELS_DIR);
-    const novels = files
-      .filter((f) => f.endsWith('.txt'))
-      .map((f) => ({
-        title: f.replace(/\.txt$/, ''),
-        filename: f,
-      }));
+    const entries = await fs.readdir(NOVELS_DIR, { withFileTypes: true });
+    const novels: { id: string; title: string; totalChars: number; chunkCount: number }[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      try {
+        const metaPath = path.join(NOVELS_DIR, entry.name, 'meta.json');
+        const metaRaw = await fs.readFile(metaPath, 'utf-8');
+        const meta = JSON.parse(metaRaw);
+        novels.push({
+          id: meta.id,
+          title: meta.title,
+          totalChars: meta.totalChars,
+          chunkCount: meta.chunkCount,
+        });
+      } catch {
+        // 跳过无 meta.json 的目录（可能是旧格式文件或损坏的目录）
+        continue;
+      }
+    }
 
     return NextResponse.json({ novels });
   } catch {

@@ -2,90 +2,78 @@
 // POST /api/chat — 小说问答流式接口
 // ============================================
 
-import { streamText } from 'ai';
-import { createAIModel, buildThinkingOptions } from '@/lib/ai/providers';
+import { chatCompletionStream } from '@/lib/ai/providers';
 import { buildChatMessages } from '@/lib/ai/chat-prompt';
-import type { AIProviderType, CustomProvider, ThinkingEffort, ChatMessage } from '@/types';
-import { needsApiKey } from '@/types';
+import type { ThinkingEffort, ChatMessage } from '@/types';
 
-/** Chat 上下文最大字符数，防止超出模型上下文窗口 */
 const MAX_CHAT_CHARS = 100_000;
+
+interface ChunkInput {
+  id: string;
+  novelId: string;
+  novelTitle: string;
+  index: number;
+  title: string;
+  content: string;
+  charCount: number;
+}
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const {
-      novelTexts,
-      novelTitles,
+      chunks,
       history,
       question,
-      provider,
       apiKey,
       model,
       baseURL,
       thinkingMode,
       thinkingEffort,
-      customProviders,
     }: {
-      novelTexts: string[];
-      novelTitles: string[];
+      chunks: ChunkInput[];
       history: ChatMessage[];
       question: string;
-      provider: AIProviderType;
       apiKey: string;
       model: string;
-      baseURL?: string;
+      baseURL: string;
       thinkingMode?: boolean;
       thinkingEffort?: ThinkingEffort;
-      customProviders?: CustomProvider[];
     } = body;
 
     if (!question?.trim()) {
       return new Response(JSON.stringify({ error: '请输入问题' }), { status: 400 });
     }
-
-    if (!novelTexts?.length) {
-      return new Response(JSON.stringify({ error: '请先上传至少一本小说' }), { status: 400 });
+    if (!chunks?.length) {
+      return new Response(JSON.stringify({ error: '请先选择至少一本小说' }), { status: 400 });
     }
-
-    if (needsApiKey(provider) && !apiKey) {
+    if (!apiKey) {
       return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
     }
 
-    const aiModel = createAIModel(provider, { apiKey, model, baseURL, customProviders: customProviders || [] });
-
-    // 截断小说文本，防止总字符数超出限制
-    let totalChars = 0;
-    const truncatedTexts = (novelTexts || []).map((text: string) => {
-      const remaining = MAX_CHAT_CHARS - totalChars;
-      if (remaining <= 0) return '';
-      const truncated = text.slice(0, remaining);
-      totalChars += truncated.length;
-      return truncated;
-    }).filter((t: string) => t.length > 0);
-
-    const { systemPrompt, messages } = buildChatMessages(
-      truncatedTexts,
-      novelTitles,
-      history || [],
-      question,
-    );
-
-    const providerOptions = buildThinkingOptions(
-      provider,
-      thinkingMode ?? false,
-      thinkingEffort ?? 'high',
-    );
-
-    const result = streamText({
-      model: aiModel,
-      system: systemPrompt,
-      messages,
-      maxOutputTokens: 4096,
-      ...(providerOptions && { providerOptions }),
+    const sortedChunks = [...chunks].sort((a, b) => {
+      if (a.novelId !== b.novelId) return a.novelId.localeCompare(b.novelId);
+      return a.index - b.index;
     });
 
-    return result.toTextStreamResponse();
+    let totalChars = 0;
+    const selectedChunks: ChunkInput[] = [];
+    for (const chunk of sortedChunks) {
+      if (totalChars + chunk.charCount > MAX_CHAT_CHARS) break;
+      selectedChunks.push(chunk);
+      totalChars += chunk.charCount;
+    }
+
+    const { systemPrompt, messages } = buildChatMessages(selectedChunks, history || [], question);
+
+    const stream = chatCompletionStream(
+      { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
+      { system: systemPrompt, messages, maxTokens: 4096, thinkingMode, thinkingEffort },
+    );
+
+    return new Response(stream, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' },
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '问答失败';
     console.error('问答接口错误:', error);
