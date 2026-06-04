@@ -37,7 +37,7 @@ export const useAppStore = create<AppState>()(
       isWriting: false,
 
       // API 设置
-      apiKey: '',
+      apiKey: process.env.NEXT_PUBLIC_DEEPSEEK_API_KEY ?? '',
       model: 'deepseek-chat',
       baseURL: 'https://api.deepseek.com',
 
