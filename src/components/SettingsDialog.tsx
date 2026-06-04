@@ -5,7 +5,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { ThinkingEffort } from '@/types';
 import { useAppStore } from '@/lib/store';
 import {
   Dialog,
@@ -14,17 +13,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -35,16 +27,14 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const storeApiKey = useAppStore((s) => s.apiKey);
   const storeModel = useAppStore((s) => s.model);
   const storeBaseURL = useAppStore((s) => s.baseURL);
-  const storeThinkingMode = useAppStore((s) => s.thinkingMode);
-  const storeThinkingEffort = useAppStore((s) => s.thinkingEffort);
+  const storeMaxContextTokens = useAppStore((s) => s.maxContextTokens);
   const setAISettings = useAppStore((s) => s.setAISettings);
 
   // 本地编辑状态
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
   const [baseURL, setBaseURL] = useState('');
-  const [thinkingMode, setThinkingMode] = useState(false);
-  const [thinkingEffort, setThinkingEffort] = useState<ThinkingEffort>('high');
+  const [maxContextTokens, setMaxContextTokens] = useState(1000000);
 
   // 弹窗打开时从 store 同步
   useEffect(() => {
@@ -52,17 +42,15 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setApiKey(storeApiKey);
     setModel(storeModel);
     setBaseURL(storeBaseURL);
-    setThinkingMode(storeThinkingMode);
-    setThinkingEffort(storeThinkingEffort);
-  }, [open, storeApiKey, storeModel, storeBaseURL, storeThinkingMode, storeThinkingEffort]);
+    setMaxContextTokens(storeMaxContextTokens);
+  }, [open, storeApiKey, storeModel, storeBaseURL, storeMaxContextTokens]);
 
   const handleSave = () => {
     setAISettings({
       apiKey: apiKey.trim(),
-      model: model.trim() || 'deepseek-v4-flash',
-      baseURL: baseURL.trim() || 'https://api.deepseek.com',
-      thinkingMode,
-      thinkingEffort,
+      model: model.trim() || DEFAULT_MODEL,
+      baseURL: baseURL.trim() || DEFAULT_BASE_URL,
+      maxContextTokens: maxContextTokens > 0 ? maxContextTokens : 1000000,
     });
     onOpenChange(false);
   };
@@ -84,7 +72,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">密钥仅保存在本地浏览器</p>
+            <p className="text-xs text-muted-foreground">密钥保存在本地浏览器，也可通过环境变量 NEXT_PUBLIC_DEEPSEEK_API_KEY 配置</p>
           </div>
 
           {/* Base URL */}
@@ -108,40 +96,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             />
           </div>
 
-          {/* 思考模式 */}
-          <div className="space-y-3 rounded-lg border border-border p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label>思考模式</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  启用后模型先推理再回答（需模型支持）
-                </p>
-              </div>
-              <Switch
-                checked={thinkingMode}
-                onCheckedChange={(v) => setThinkingMode(v)}
-              />
-            </div>
-
-            {thinkingMode && (
-              <div className="space-y-2">
-                <Label className="text-xs">思考强度</Label>
-                <Select
-                  value={thinkingEffort}
-                  onValueChange={(v) => {
-                    if (v) setThinkingEffort(v as ThinkingEffort);
-                  }}
-                >
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="high">High — 平衡速度与质量</SelectItem>
-                    <SelectItem value="max">Max — 最深度思考（较慢）</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+          {/* 最大上下文长度 */}
+          <div className="space-y-2">
+            <Label>最大上下文长度（Token）</Label>
+            <Input
+              type="number"
+              min={1000}
+              value={maxContextTokens}
+              onChange={(e) => setMaxContextTokens(Number(e.target.value))}
+            />
+            <p className="text-xs text-muted-foreground">控制分析长篇小说时的分批大小，需为模型支持的最大上下文长度</p>
           </div>
         </div>
 

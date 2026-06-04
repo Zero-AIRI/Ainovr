@@ -39,7 +39,7 @@ export interface NovelChunk {
   charCount: number;   // content.length
 }
 
-/** 导入管道配置 */
+/** 导入管道配置（保留用于 IndexedDB 旧数据兼容） */
 export interface ImportConfig {
   cleaning: CleaningConfig;
   /** 分块大小上限（字符数），超过此大小的章节会被进一步分割 */
@@ -62,20 +62,11 @@ export interface ParsedNovel {
   importConfig: ImportConfig | null;
 }
 
-/** 思考强度 */
-export type ThinkingEffort = 'high' | 'max';
-
 /** 仿写篇幅选项 */
 export type WriteLength = 'fragment' | 'chapter' | 'short';
 
-/** 聊天消息 */
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
 /** 当前激活的视图 */
-export type ActiveView = 'welcome' | 'analyze' | 'write' | 'chat';
+export type ActiveView = 'analyze' | 'write';
 
 /** 应用全局状态 */
 export interface AppState {
@@ -98,18 +89,8 @@ export interface AppState {
   model: string;
   baseURL: string;
 
-  // 思考模式
-  thinkingMode: boolean;
-  thinkingEffort: ThinkingEffort;
-
-  // 聊天记录
-  chatMessages: ChatMessage[];
-
-  // 文本处理配置
-  importConfig: ImportConfig;
-
-  // 问答选中的书籍 ID 列表
-  selectedBookIds: string[];
+  // 最大上下文 Token 数（控制分批分析的每批大小）
+  maxContextTokens: number;
 
   // Actions
   setActiveView: (view: ActiveView) => void;
@@ -120,22 +101,11 @@ export interface AppState {
   setIsAnalyzing: (v: boolean) => void;
   setWriteResult: (result: string | null) => void;
   setIsWriting: (v: boolean) => void;
-  setAISettings: (settings: Partial<Pick<AppState, 'apiKey' | 'model' | 'baseURL' | 'thinkingMode' | 'thinkingEffort'>>) => void;
-
-  // 文本处理
-  updateImportConfig: (config: Partial<ImportConfig>) => void;
-  reprocessNovel: (novelId: string) => Promise<void>;
-  reprocessAllNovels: () => Promise<void>;
-
-  // 聊天记录
-  setChatMessages: (messages: ChatMessage[]) => void;
-  addChatMessage: (message: ChatMessage) => void;
-  clearChatMessages: () => void;
-
-  // 书籍选择
-  setSelectedBookIds: (ids: string[]) => void;
-  toggleSelectedBook: (novelId: string) => void;
+  setAISettings: (settings: Partial<Pick<AppState, 'apiKey' | 'model' | 'baseURL' | 'maxContextTokens'>>) => void;
 
   // 启动恢复
   loadNovelsFromIDB: () => Promise<void>;
+
+  // 运行时解析 API Key（用户配置优先，环境变量兜底）
+  getEffectiveApiKey: () => string;
 }

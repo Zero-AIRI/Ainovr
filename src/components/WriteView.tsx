@@ -24,12 +24,6 @@ import { useAppStore } from '@/lib/store';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
 import type { WriteLength } from '@/types';
 
-const GENRE_OPTIONS = [
-  '玄幻', '仙侠', '都市', '历史', '科幻',
-  '悬疑', '奇幻', '武侠', '言情', '游戏',
-  '末世', '灵异', '军事', '校园', '其他',
-];
-
 const LENGTH_OPTIONS: { value: WriteLength; label: string; desc: string }[] = [
   { value: 'fragment', label: '片段', desc: '约500-1000字' },
   { value: 'chapter', label: '章节', desc: '约2000-4000字' },
@@ -39,18 +33,16 @@ const LENGTH_OPTIONS: { value: WriteLength; label: string; desc: string }[] = [
 export function WriteView() {
   const novels = useAppStore((s) => s.novels);
   const analysisReport = useAppStore((s) => s.analysisReport);
-  const apiKey = useAppStore((s) => s.apiKey);
+  const getEffectiveApiKey = useAppStore((s) => s.getEffectiveApiKey);
   const model = useAppStore((s) => s.model);
   const baseURL = useAppStore((s) => s.baseURL);
-  const thinkingMode = useAppStore((s) => s.thinkingMode);
-  const thinkingEffort = useAppStore((s) => s.thinkingEffort);
   const isWriting = useAppStore((s) => s.isWriting);
   const writeResult = useAppStore((s) => s.writeResult);
   const setIsWriting = useAppStore((s) => s.setIsWriting);
   const setWriteResult = useAppStore((s) => s.setWriteResult);
   const setActiveView = useAppStore((s) => s.setActiveView);
 
-  const [genre, setGenre] = useState('玄幻');
+  const [genre, setGenre] = useState('');
   const [length, setLength] = useState<WriteLength>('chapter');
   const [synopsis, setSynopsis] = useState('');
   const [extraRequirements, setExtraRequirements] = useState('');
@@ -76,15 +68,8 @@ export function WriteView() {
     }
   }, [error]);
 
-  const canWrite = synopsis.trim().length > 0 && !!analysisReport && !!apiKey;
-
-  const buildAIBody = () => ({
-    apiKey,
-    model,
-    baseURL,
-    thinkingMode,
-    thinkingEffort,
-  });
+  const apiKey = getEffectiveApiKey();
+  const canWrite = genre.trim().length > 0 && synopsis.trim().length > 0 && !!analysisReport && !!apiKey;
 
   const startWriting = async () => {
     if (!canWrite) return;
@@ -96,7 +81,9 @@ export function WriteView() {
       length,
       synopsis,
       extraRequirements: extraRequirements || undefined,
-      ...buildAIBody(),
+      apiKey,
+      model,
+      baseURL,
     });
 
     if (fullText) {
@@ -107,10 +94,8 @@ export function WriteView() {
   const handleContinue = async () => {
     if (!streamContent || !analysisReport) return;
 
-    // 续写需要特殊处理：使用 setStreamContent 追加而非覆盖
-    // 所以不走 startFetch，直接手写（但带 AbortController）
     const controller = new AbortController();
-    abortRef.current = controller; // 让 hook 的 unmount cleanup 能 abort 这次请求
+    abortRef.current = controller;
 
     setIsWriting(true);
 
@@ -122,7 +107,9 @@ export function WriteView() {
           mode: 'continue',
           analysisReport,
           existingText: streamContent.slice(-3000),
-          ...buildAIBody(),
+          apiKey,
+          model,
+          baseURL,
         }),
         signal: controller.signal,
       });
@@ -158,8 +145,9 @@ export function WriteView() {
 
   const handleExport = () => {
     if (!streamContent) return;
+    const name = genre.trim() || '仿写';
     const blob = new Blob([streamContent], { type: 'text/plain;charset=utf-8' });
-    saveAs(blob, `仿写_${genre}_${Date.now()}.txt`);
+    saveAs(blob, `${name}_${Date.now()}.txt`);
   };
 
   // 没有分析报告
@@ -194,16 +182,11 @@ export function WriteView() {
             {/* 故事类型 */}
             <div className="space-y-2">
               <Label>故事类型</Label>
-              <Select value={genre} onValueChange={(v) => v !== null && setGenre(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {GENRE_OPTIONS.map((g) => (
-                    <SelectItem key={g} value={g}>{g}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input
+                value={genre}
+                onChange={(e) => setGenre(e.target.value)}
+                placeholder="例如：玄幻、仙侠、都市、科幻..."
+              />
             </div>
 
             {/* 篇幅 */}

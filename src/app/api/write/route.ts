@@ -4,14 +4,13 @@
 
 import { chatCompletionStream } from '@/lib/ai/providers';
 import { buildWriteMessages, buildContinueMessages } from '@/lib/ai/write-prompt';
-import type { WriteLength, ThinkingEffort } from '@/types';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
+import type { WriteLength } from '@/types';
 
 interface CommonParams {
   apiKey: string;
   model: string;
   baseURL: string;
-  thinkingMode?: boolean;
-  thinkingEffort?: ThinkingEffort;
 }
 
 export async function POST(req: Request) {
@@ -33,13 +32,13 @@ async function handleWrite(body: {
   synopsis: string;
   extraRequirements?: string;
 } & CommonParams) {
-  const { analysisReport, genre, length, synopsis, extraRequirements, apiKey, model, baseURL, thinkingMode, thinkingEffort } = body;
+  const { analysisReport, genre, length, synopsis, extraRequirements, apiKey, model, baseURL } = body;
   if (!apiKey) return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
 
   const { systemPrompt, userMessage } = buildWriteMessages(analysisReport, genre, length, synopsis, extraRequirements);
   const stream = chatCompletionStream(
-    { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
-    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 8192, thinkingMode, thinkingEffort },
+    { apiKey, model: model || DEFAULT_MODEL, baseURL: baseURL || DEFAULT_BASE_URL },
+    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 8192 },
   );
 
   return new Response(stream, {
@@ -52,13 +51,13 @@ async function handleContinue(body: {
   existingText: string;
   extraHint?: string;
 } & CommonParams) {
-  const { analysisReport, existingText, extraHint, apiKey, model, baseURL, thinkingMode, thinkingEffort } = body;
+  const { analysisReport, existingText, extraHint, apiKey, model, baseURL } = body;
   if (!apiKey) return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
 
   const { systemPrompt, userMessage } = buildContinueMessages(analysisReport, existingText, extraHint);
   const stream = chatCompletionStream(
-    { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
-    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 4096, thinkingMode, thinkingEffort },
+    { apiKey, model: model || DEFAULT_MODEL, baseURL: baseURL || DEFAULT_BASE_URL },
+    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 4096 },
   );
 
   return new Response(stream, {

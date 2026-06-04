@@ -3,26 +3,24 @@
 // ============================================
 
 import { chatCompletionStream } from '@/lib/ai/providers';
-import { buildAnalyzeMessages } from '@/lib/ai/analyze-prompt';
-import type { ThinkingEffort } from '@/types';
+import { buildAnalyzeMessages, buildSupplementMessages } from '@/lib/ai/analyze-prompt';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const {
       novelTexts,
+      previousReport,
       apiKey,
       model,
       baseURL,
-      thinkingMode,
-      thinkingEffort,
     }: {
       novelTexts: string[];
+      previousReport?: string;
       apiKey: string;
       model: string;
       baseURL: string;
-      thinkingMode?: boolean;
-      thinkingEffort?: ThinkingEffort;
     } = body;
 
     if (!novelTexts?.length) {
@@ -32,10 +30,13 @@ export async function POST(req: Request) {
       return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
     }
 
-    const { systemPrompt, userMessage } = buildAnalyzeMessages(novelTexts);
+    const { systemPrompt, userMessage } = previousReport
+      ? buildSupplementMessages(novelTexts.join('\n\n'), previousReport)
+      : buildAnalyzeMessages(novelTexts);
+
     const stream = chatCompletionStream(
-      { apiKey, model: model || 'deepseek-v4-flash', baseURL: baseURL || 'https://api.deepseek.com' },
-      { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 4096, thinkingMode, thinkingEffort },
+      { apiKey, model: model || DEFAULT_MODEL, baseURL: baseURL || DEFAULT_BASE_URL },
+      { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 4096 },
     );
 
     return new Response(stream, {

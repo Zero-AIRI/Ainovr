@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { safeJoin } from '@/lib/safe-path';
 
 const NOVELS_DIR = path.join(process.cwd(), 'data', 'novels');
 
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const bookDir = path.join(NOVELS_DIR, id);
+    const bookDir = safeJoin(NOVELS_DIR, id);
     await fs.mkdir(bookDir, { recursive: true });
 
     // 元数据

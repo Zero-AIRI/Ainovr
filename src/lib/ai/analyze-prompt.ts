@@ -2,13 +2,7 @@
 // 风格分析 — 系统提示词模板
 // ============================================
 
-/**
- * 构建风格分析的系统提示和用户消息
- */
-export function buildAnalyzeMessages(novelTexts: string[]) {
-  const combinedText = novelTexts.join('\n\n--- 另一部作品 ---\n\n');
-
-  const systemPrompt = `你是一位资深文学评论家和小说创作导师，拥有极其敏锐的文学鉴赏力和丰富的创作经验。
+const ANALYSIS_SYSTEM_PROMPT = `你是一位资深文学评论家和小说创作导师，拥有极其敏锐的文学鉴赏力和丰富的创作经验。
 
 你的任务是深入分析给定的小说文本，从以下五个维度提取写作风格特征，并给出详细、具体、可直接指导创作的分析报告。
 
@@ -52,9 +46,50 @@ export function buildAnalyzeMessages(novelTexts: string[]) {
 
 最后用醒目的标签形式列出风格关键词。`;
 
+/**
+ * 构建首次风格分析的系统提示和用户消息
+ */
+export function buildAnalyzeMessages(novelTexts: string[]) {
+  const combinedText = novelTexts.join('\n\n--- 另一部作品 ---\n\n');
+
+  const systemPrompt = ANALYSIS_SYSTEM_PROMPT;
+
   const userMessage = `请分析以下小说文本的写作风格：
 
 ${combinedText}`;
+
+  return { systemPrompt, userMessage };
+}
+
+/**
+ * 构建补充分析的系统提示和用户消息
+ * 用于分批分析的第 2 轮及以后：送入新文本 + 上一轮报告，让 AI 补充修正
+ */
+export function buildSupplementMessages(newChunk: string, previousReport: string) {
+  const systemPrompt = `你是一位资深文学评论家和小说创作导师。你之前已经分析了该作者的部分作品并生成了一份风格分析报告。
+
+现在你收到了该作者的更多文本。你的任务是：
+1. 仔细阅读新的文本片段
+2. 结合新文本中的发现，对之前的分析报告进行补充和修正
+3. 输出**完整的**更新后的分析报告（不是增量，而是完整的最终版本）
+
+保持与之前分析报告相同的结构（文风特征、剧情结构、人物塑造、叙事技巧、风格标签），但在每个维度中补充新发现的特征，修正不够准确的描述，添加新的原文例句。
+
+如果新文本与之前的分析结论一致，保持原有描述即可。如果有新的发现，务必补充进去。`;
+
+  const userMessage = `## 之前已生成的分析报告
+
+${previousReport}
+
+---
+
+## 新的文本片段
+
+${newChunk}
+
+---
+
+请基于以上全部信息，输出完整的、更新后的风格分析报告。`;
 
   return { systemPrompt, userMessage };
 }

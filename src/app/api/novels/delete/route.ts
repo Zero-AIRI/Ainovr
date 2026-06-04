@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { safeJoin } from '@/lib/safe-path';
 
 const NOVELS_DIR = path.join(process.cwd(), 'data', 'novels');
 
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '缺少 id' }, { status: 400 });
     }
 
-    const bookDir = path.join(NOVELS_DIR, id);
+    const bookDir = safeJoin(NOVELS_DIR, id);
     await removeDir(bookDir);
 
     return NextResponse.json({ success: true });
