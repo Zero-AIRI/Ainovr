@@ -1,5 +1,5 @@
 // ============================================
-// 左侧边栏 — Notion/Typora 风格
+// 左侧边栏 — 简洁导航 + 处理进度指示
 // ============================================
 
 'use client';
@@ -9,23 +9,27 @@ import {
   Settings,
   Library,
   PenTool,
-  Layers,
   BookOpen,
+  Loader2,
+  FileCode,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store/project';
+import { useSourceProcessingStore } from '@/lib/store/source-processing';
 import type { ActiveView } from '@/types';
 import { SettingsDialog } from '@/components/SettingsDialog';
 
 export function Sidebar() {
   const activeView = useProjectStore((s) => s.activeView);
   const setActiveView = useProjectStore((s) => s.setActiveView);
+  const processingNovelId = useSourceProcessingStore((s) => s.processingNovelId);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const isProcessing = !!processingNovelId;
 
   const navItems: { key: ActiveView; label: string; icon: typeof Library }[] = [
     { key: 'source-library', label: '素材库', icon: Library },
     { key: 'writing-project', label: '写作项目', icon: PenTool },
-    { key: 'layer-generation', label: '层级规划', icon: Layers },
-    { key: 'chapter-generation', label: '章节生成', icon: BookOpen },
+    { key: 'prompt-management', label: '提示词管理', icon: FileCode },
   ];
 
   return (
@@ -41,22 +45,33 @@ export function Sidebar() {
 
         {/* 导航 */}
         <nav className="px-3 py-4 space-y-0.5">
-          {navItems.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setActiveView(key)}
-              className={`
-                w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors
-                ${activeView === key
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                  : 'text-foreground/70 hover:bg-sidebar-accent/60 hover:text-foreground'
-                }
-              `}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          ))}
+          {navItems.map(({ key, label, icon: Icon }) => {
+            // 素材库高亮：包括 source-detail 视图
+            const isActive = key === 'source-library'
+              ? (activeView === 'source-library' || activeView === 'source-detail')
+              : activeView === key;
+
+            return (
+              <button
+                key={key}
+                onClick={() => setActiveView(key)}
+                className={`
+                  w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors
+                  ${isActive
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                    : 'text-foreground/70 hover:bg-sidebar-accent/60 hover:text-foreground'
+                  }
+                `}
+              >
+                <Icon className="w-4 h-4" />
+                {label}
+                {/* 处理进度指示 */}
+                {key === 'source-library' && isProcessing && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary ml-auto" />
+                )}
+              </button>
+            );
+          })}
         </nav>
 
         {/* 设置按钮 — 底部 */}

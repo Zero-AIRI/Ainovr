@@ -2,9 +2,9 @@
 // Step 3: 代表性切片选取 — 系统提示词
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 代表性切片选取提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是从全部切片中精选 3-5 个代表性切片。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是从全部切片中精选 3-5 个代表性切片。
 
 要求：
 - 每个对应一种典型的写作场景（战斗/日常/高潮/对话/描写）
@@ -28,5 +28,5 @@ export function buildSampleSelectionMessages(
   plotReport: string,
 ) {
   const userMessage = `## 文风档案\n\n${styleProfile}\n\n---\n\n## 情节规律报告\n\n${plotReport}\n\n---\n\n## 切片列表\n\n${slicesSummary}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('source-samples', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

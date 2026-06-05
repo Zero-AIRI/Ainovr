@@ -2,9 +2,9 @@
 // Step 1: 智能切片 — 系统提示词
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 智能切片提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是分析小说文本，按叙事弧线进行智能切片。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是分析小说文本，按叙事弧线进行智能切片。
 
 要求：
 - 以情节完整性为最高优先级（不在高潮中间切断）
@@ -26,5 +26,5 @@ const SYSTEM_PROMPT = `/* PLACEHOLDER: 智能切片提示词待设计 */
 `;
 
 export function buildSlicingMessages(novelText: string) {
-  return { systemPrompt: SYSTEM_PROMPT, userMessage: novelText };
+  return { systemPrompt: getPrompt('source-slicing', DEFAULT_SYSTEM_PROMPT), userMessage: novelText };
 }

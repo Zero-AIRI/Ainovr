@@ -2,9 +2,9 @@
 // Step 2b: 情节规律提取 — 系统提示词
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 情节规律提取提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是分析小说文本，提取情节规律，分为大情节和小情节两个层级。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是分析小说文本，提取情节规律，分为大情节和小情节两个层级。
 
 ## 提取内容
 
@@ -26,19 +26,17 @@ const SYSTEM_PROMPT = `/* PLACEHOLDER: 情节规律提取提示词待设计 */
 输出为 Markdown 格式的情节规律报告（plot_report.md）。
 `;
 
-const SUPPLEMENT_PROMPT = `/* PLACEHOLDER: 情节补充分析提示词待设计 */
-
-你之前已经分析了该作者的部分作品并生成了一份情节规律报告。
+const DEFAULT_SUPPLEMENT_PROMPT = `你之前已经分析了该作者的部分作品并生成了一份情节规律报告。
 现在你收到了更多文本。请结合新文本，对情节规律报告进行补充和修正。
 输出完整的更新后的情节规律报告。
 `;
 
 export function buildPlotExtractionMessages(slicesText: string, styleProfile: string) {
   const userMessage = `## 文风档案（参考）\n\n${styleProfile}\n\n---\n\n## 小说文本\n\n${slicesText}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('source-plot', DEFAULT_SYSTEM_PROMPT), userMessage };
 }
 
 export function buildPlotSupplementMessages(newChunk: string, previousReport: string, styleProfile: string) {
   const userMessage = `## 之前的情节规律报告\n\n${previousReport}\n\n---\n\n## 文风档案（参考）\n\n${styleProfile}\n\n---\n\n## 新的文本片段\n\n${newChunk}\n\n---\n\n请基于以上全部信息，输出完整的、更新后的情节规律报告。`;
-  return { systemPrompt: SUPPLEMENT_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('source-plot-supplement', DEFAULT_SUPPLEMENT_PROMPT), userMessage };
 }

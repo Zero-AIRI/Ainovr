@@ -2,9 +2,9 @@
 // Layer 3 框架: 分卷 — 确定数量和主题
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 分卷框架提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是根据阶段规划和小情节模式库，为指定阶段规划分卷框架。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是根据阶段规划和小情节模式库，为指定阶段规划分卷框架。
 
 要求：
 - 每阶段 1-2 卷
@@ -20,5 +20,5 @@ export function buildVolumeFrameworkMessages(
   minorPlotPatterns: string,
 ) {
   const userMessage = `## 全书大纲\n\n${outline}\n\n---\n\n## 阶段规划\n\n${phaseContent}\n\n---\n\n## 小情节模式库\n\n${minorPlotPatterns}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('volume-framework', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

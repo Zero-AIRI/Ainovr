@@ -2,9 +2,9 @@
 // Layer 4 填充: 单集合详细规划
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 章节集合详细提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是为指定章节集合生成详细规划。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是为指定章节集合生成详细规划。
 
 要求：
 - 约 200 字
@@ -19,5 +19,5 @@ export function buildChapterSetDetailMessages(
   minorPlotPatterns: string,
 ) {
   const userMessage = `## 卷规划\n\n${volumeContent}\n\n---\n\n## 集合框架\n\n${setFramework}\n\n---\n\n## 小情节模式库\n\n${minorPlotPatterns}\n\n---\n\n请为第 ${setIndex + 1} 个集合生成详细规划。`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('chapter-set-detail', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

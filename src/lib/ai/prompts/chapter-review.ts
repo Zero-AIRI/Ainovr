@@ -2,9 +2,9 @@
 // 章节自动审查 — 系统提示词（5维度）
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 章节自动审查提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是对生成的章节正文进行 5 维度审查。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是对生成的章节正文进行 5 维度审查。
 
 审查维度：
 1. style_consistency（文风一致性）：是否与目标文风档案一致
@@ -31,5 +31,5 @@ export function buildChapterReviewMessages(
   chapterTask: string,
 ) {
   const userMessage = `## 文风参考\n\n${styleGuide}\n\n---\n\n## 章节计划\n\n${chapterTask}\n\n---\n\n## 待审查的章节正文\n\n${chapterContent}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('chapter-review', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

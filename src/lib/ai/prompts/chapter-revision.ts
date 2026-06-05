@@ -2,9 +2,9 @@
 // 章节修正 — 基于审查结果 + 人工反馈
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 章节修正提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是根据审查结果和（可能的）人工反馈，修正章节正文。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是根据审查结果和（可能的）人工反馈，修正章节正文。
 
 要求：
 - 只修正审查中指出的问题，保持其余部分不变
@@ -25,5 +25,5 @@ export function buildChapterRevisionMessages(
     : '';
 
   const userMessage = `## 文风参考\n\n${styleGuide}\n\n---\n\n## 章节计划\n\n${chapterTask}\n\n---\n\n## 审查结果\n\n${reviews}\n\n---\n\n## 原始章节正文\n\n${chapterContent}${feedbackSection}\n\n---\n\n请输出修正后的完整章节正文。`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('chapter-revision', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

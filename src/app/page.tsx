@@ -9,10 +9,12 @@ import { useProjectStore } from '@/lib/store/project';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { Sidebar } from '@/components/Sidebar';
 import { SourceLibraryView } from '@/components/source/SourceLibraryView';
+import { SourceNovelDetailView } from '@/components/source/SourceNovelDetailView';
 import { SourceProcessView } from '@/components/source/SourceProcessView';
 import { WritingProjectView } from '@/components/project/WritingProjectView';
 import { LayerGenerationView } from '@/components/generation/LayerGenerationView';
 import { ChapterGenerationView } from '@/components/chapter/ChapterGenerationView';
+import { PromptManagementView } from '@/components/prompts/PromptManagementView';
 
 export default function HomePage() {
   const activeView = useProjectStore((s) => s.activeView);
@@ -29,8 +31,11 @@ export default function HomePage() {
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden bg-background">
         {activeView === 'source-library' && <SourceLibraryView />}
-        {activeView === 'source-process' && <SourceProcessView />}
+        {activeView === 'source-detail' && <SourceNovelDetailView />}
         {activeView === 'writing-project' && <WritingProjectView />}
+        {activeView === 'prompt-management' && <PromptManagementView />}
+        {/* 旧视图兼容 — 迁移完成后移除 */}
+        {activeView === 'source-process' && <SourceProcessView />}
         {activeView === 'layer-generation' && <LayerGenerationView />}
         {activeView === 'chapter-generation' && <ChapterGenerationView />}
       </main>

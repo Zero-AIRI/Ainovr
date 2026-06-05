@@ -2,9 +2,9 @@
 // Layer 2 框架: 阶段规划 — 确定数量和主题
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 阶段规划框架提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是根据全书大纲和节奏/伏笔规则，规划阶段框架。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是根据全书大纲和节奏/伏笔规则，规划阶段框架。
 
 要求：
 - 输出 4-6 个阶段的标题和预估章节范围
@@ -22,5 +22,5 @@ export function buildPhaseFrameworkMessages(
   plotGuide: string,
 ) {
   const userMessage = `## 全书大纲\n\n${outline}\n\n---\n\n## 节奏与伏笔规则\n\n${plotGuide}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('phase-framework', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

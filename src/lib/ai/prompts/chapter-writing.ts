@@ -2,9 +2,9 @@
 // 章节正文生成 — 系统提示词
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 章节正文生成提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是根据章节计划和上下文，生成章节正文。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是根据章节计划和上下文，生成章节正文。
 
 生成前上下文包含：
 1. 风格指导（文风档案 + 情节规律报告）
@@ -22,5 +22,5 @@ export function buildChapterWritingMessages(
   previousState: string,
 ) {
   const userMessage = `## 风格指导\n\n${styleGuide}\n\n---\n\n## 层级上下文\n\n${hierarchyContext}\n\n---\n\n## 本章任务\n\n${chapterTask}\n\n---\n\n## 前文状态\n\n${previousState}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('chapter-writing', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

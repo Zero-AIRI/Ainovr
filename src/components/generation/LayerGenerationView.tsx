@@ -21,7 +21,7 @@ const LAYER_INFO = [
   { title: '每章计划', description: '每章约100字，场景节拍+关键词+伏笔操作' },
 ];
 
-export function LayerGenerationView() {
+export function LayerGenerationView({ embedded = false }: { embedded?: boolean }) {
   const { projects, activeProjectId, setActiveProjectId, setActiveView, setOutline, setPhases, setVolumes, setChapterSets, setChapterPlans } = useProjectStore();
   const { sourceNovels } = useSourceLibraryStore();
   const { getEffectiveApiKey, model, baseURL, maxContextTokens } = useSettingsStore();
@@ -90,7 +90,9 @@ export function LayerGenerationView() {
     <div className="flex-1 flex overflow-hidden">
       {/* 左侧：层级树 */}
       <div className="w-64 border-r border-border overflow-y-auto p-3">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">层级结构</h3>
+        {!embedded && (
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">层级结构</h3>
+        )}
         <HierarchyTree
           outline={project.outline}
           phases={project.phases}
@@ -102,16 +104,18 @@ export function LayerGenerationView() {
 
       {/* 右侧：逐层操作 */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        <div className="flex items-center gap-3 mb-4">
-          <button
-            onClick={() => { setActiveProjectId(null); setActiveView('writing-project'); }}
-            className="p-1.5 rounded hover:bg-accent transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <h1 className="text-xl font-bold text-foreground">{project.title}</h1>
-          <span className="text-xs text-muted-foreground">层级 {currentLayer}/5</span>
-        </div>
+        {!embedded && (
+          <div className="flex items-center gap-3 mb-4">
+            <button
+              onClick={() => { setActiveProjectId(null); setActiveView('writing-project'); }}
+              className="p-1.5 rounded hover:bg-accent transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <h1 className="text-xl font-bold text-foreground">{project.title}</h1>
+            <span className="text-xs text-muted-foreground">层级 {currentLayer}/5</span>
+          </div>
+        )}
 
         {/* Layer 1: 需要用户输入创作想法 */}
         {currentLayer === 0 && (

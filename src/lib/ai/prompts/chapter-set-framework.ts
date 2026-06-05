@@ -2,9 +2,9 @@
 // Layer 4 框架: 章节集合 — 确定数量和主题
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 章节集合框架提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是根据卷规划，为指定卷规划章节集合框架。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是根据卷规划，为指定卷规划章节集合框架。
 
 要求：
 - 每卷 3-5 个集合
@@ -19,5 +19,5 @@ export function buildChapterSetFrameworkMessages(
   minorPlotPatterns: string,
 ) {
   const userMessage = `## 卷规划\n\n${volumeContent}\n\n---\n\n## 小情节模式库\n\n${minorPlotPatterns}`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('chapter-set-framework', DEFAULT_SYSTEM_PROMPT), userMessage };
 }

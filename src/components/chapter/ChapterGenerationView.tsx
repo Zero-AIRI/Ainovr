@@ -18,7 +18,7 @@ import { FeedbackInput } from './FeedbackInput';
 import type { GeneratedChapter, ChapterReview, ChapterPlan } from '@/types';
 import { nanoid } from 'nanoid';
 
-export function ChapterGenerationView() {
+export function ChapterGenerationView({ embedded = false }: { embedded?: boolean }) {
   const { projects, activeProjectId, setActiveView, addGeneratedChapter, updateGeneratedChapter } = useProjectStore();
   const { sourceNovels } = useSourceLibraryStore();
   const { getEffectiveApiKey, model, baseURL } = useSettingsStore();
@@ -144,12 +144,14 @@ export function ChapterGenerationView() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-6">
         <p className="text-sm">尚未生成章节计划</p>
-        <button
-          onClick={() => setActiveView('layer-generation')}
-          className="mt-3 px-4 py-2 rounded text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-        >
-          前往层级规划
-        </button>
+        {!embedded && (
+          <button
+            onClick={() => setActiveView('layer-generation')}
+            className="mt-3 px-4 py-2 rounded text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            前往层级规划
+          </button>
+        )}
       </div>
     );
   }
@@ -159,12 +161,14 @@ export function ChapterGenerationView() {
       {/* 左侧：章节列表 */}
       <div className="w-56 border-r border-border overflow-y-auto p-3">
         <div className="flex items-center gap-2 mb-3">
-          <button
-            onClick={() => setActiveView('layer-generation')}
-            className="p-1 rounded hover:bg-accent transition-colors"
-          >
-            <ArrowLeft className="w-3 h-3" />
-          </button>
+          {!embedded && (
+            <button
+              onClick={() => setActiveView('layer-generation')}
+              className="p-1 rounded hover:bg-accent transition-colors"
+            >
+              <ArrowLeft className="w-3 h-3" />
+            </button>
+          )}
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">章节计划</h3>
         </div>
 

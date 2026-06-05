@@ -2,9 +2,9 @@
 // Layer 5 填充: 单章详细计划
 // ============================================
 
-const SYSTEM_PROMPT = `/* PLACEHOLDER: 单章详细计划提示词待设计 */
+import { getPrompt } from './helpers';
 
-你的任务是为指定章节生成详细计划。
+const DEFAULT_SYSTEM_PROMPT = `你的任务是为指定章节生成详细计划。
 
 要求：
 - 约 100 字
@@ -19,5 +19,5 @@ export function buildChapterPlanDetailMessages(
   minorPlotPatterns: string,
 ) {
   const userMessage = `## 集合规划\n\n${setContent}\n\n---\n\n## 章节计划框架\n\n${planFramework}\n\n---\n\n## 小情节模式库\n\n${minorPlotPatterns}\n\n---\n\n请为第 ${chapterIndex + 1} 章生成详细计划。`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  return { systemPrompt: getPrompt('chapter-plan-detail', DEFAULT_SYSTEM_PROMPT), userMessage };
 }
