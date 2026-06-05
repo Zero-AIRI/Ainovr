@@ -214,7 +214,8 @@ export function WritingProjectView() {
           projects.map((project) => (
             <div
               key={project.id}
-              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-accent/50 transition-colors"
+              onClick={() => handleOpenProject(project)}
+              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-accent/50 transition-colors cursor-pointer group"
             >
               <FolderOpen className="w-4 h-4 text-primary shrink-0" />
               <div className="flex-1 min-w-0">
@@ -224,13 +225,8 @@ export function WritingProjectView() {
                 </p>
               </div>
               <button
-                onClick={() => handleOpenProject(project)}
-                className="px-3 py-1 rounded text-xs bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-              >
-                打开
-              </button>
-              <button
-                onClick={async () => {
+                onClick={async (e) => {
+                  e.stopPropagation();
                   await fetch('/api/project/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

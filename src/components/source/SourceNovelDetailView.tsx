@@ -34,13 +34,23 @@ export function SourceNovelDetailView() {
   const isThisProcessing = processingStore.processingNovelId === activeSourceId;
   const isAnyProcessing = processingStore.isRunningAll;
 
-  // 加载原文
+  // 加载完整数据（包含 styleProfile / plotReport）
   useEffect(() => {
     if (!activeSourceId) return;
     fetch(`/api/library/get?id=${activeSourceId}`)
       .then((res) => res.json())
       .then((data) => {
         setRawText(data.rawText ?? null);
+        // 将完整数据更新到 store，确保 styleProfile / plotReport 可用
+        if (data.styleProfile !== undefined || data.plotReport !== undefined) {
+          useSourceLibraryStore.getState().updateSourceNovel(activeSourceId, {
+            styleProfile: data.styleProfile ?? null,
+            plotReport: data.plotReport ?? null,
+            slices: data.slices ?? null,
+            representativeSamples: data.representativeSamples ?? null,
+            status: data.status ?? 'raw',
+          });
+        }
       })
       .catch(console.error);
   }, [activeSourceId]);
@@ -99,28 +109,26 @@ export function SourceNovelDetailView() {
         </div>
 
         {/* 操作按钮 */}
-        {!isReady && (
-          <div className="flex items-center gap-2">
-            {isThisProcessing ? (
-              <button
-                onClick={handleCancel}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-destructive/10 text-destructive text-sm hover:bg-destructive/20 transition-colors"
-              >
-                <XCircle className="w-4 h-4" />
-                取消处理
-              </button>
-            ) : (
-              <button
-                onClick={handleStartProcessing}
-                disabled={isAnyProcessing || !rawText}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                <Play className="w-4 h-4" />
-                一键处理
-              </button>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {isThisProcessing ? (
+            <button
+              onClick={handleCancel}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-destructive/10 text-destructive text-sm hover:bg-destructive/20 transition-colors"
+            >
+              <XCircle className="w-4 h-4" />
+              取消处理
+            </button>
+          ) : (
+            <button
+              onClick={handleStartProcessing}
+              disabled={isAnyProcessing || !rawText}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isReady ? <RotateCcw className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {isReady ? '重新处理' : '一键处理'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 进度指示器（处理中显示） */}
