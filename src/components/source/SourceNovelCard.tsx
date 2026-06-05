@@ -1,10 +1,10 @@
 // ============================================
-// 源小说卡片
+// 源小说卡片 — 简洁状态显示
 // ============================================
 
 'use client';
 
-import { FileText, CheckCircle, Loader2, AlertCircle, Plus } from 'lucide-react';
+import { FileText, CheckCircle, Loader2, AlertCircle } from 'lucide-react';
 import type { SourceNovel, SourceNovelStatus } from '@/types';
 
 interface SourceNovelCardProps {
@@ -18,7 +18,7 @@ const STATUS_CONFIG: Record<SourceNovelStatus, { label: string; color: string; i
   slicing: { label: '切片中', color: 'text-blue-500', icon: Loader2 },
   extracting: { label: '提取中', color: 'text-blue-500', icon: Loader2 },
   selecting: { label: '选取中', color: 'text-blue-500', icon: Loader2 },
-  ready: { label: '已就绪', color: 'text-green-500', icon: CheckCircle },
+  ready: { label: '已处理', color: 'text-green-500', icon: CheckCircle },
   error: { label: '出错', color: 'text-red-500', icon: AlertCircle },
 };
 
@@ -28,9 +28,10 @@ function formatChars(n: number): string {
   return `${n}`;
 }
 
-export function SourceNovelCard({ novel, onClick, onAddToProject }: SourceNovelCardProps) {
+export function SourceNovelCard({ novel, onClick }: SourceNovelCardProps) {
   const config = STATUS_CONFIG[novel.status];
   const Icon = config.icon;
+  const isProcessing = novel.status === 'slicing' || novel.status === 'extracting' || novel.status === 'selecting';
 
   return (
     <div
@@ -44,33 +45,28 @@ export function SourceNovelCard({ novel, onClick, onAddToProject }: SourceNovelC
             《{novel.title}》
           </span>
         </div>
-        {novel.status === 'ready' && onAddToProject && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onAddToProject(); }}
-            className="shrink-0 p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors opacity-0 group-hover:opacity-100"
-            title="添加到写作项目"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-        )}
       </div>
 
       <div className="flex items-center gap-3 mt-2">
         <span className="text-xs text-muted-foreground">{formatChars(novel.totalChars)}字</span>
-
         <div className={`flex items-center gap-1 text-xs ${config.color}`}>
-          <Icon className={`w-3 h-3 ${novel.status === 'slicing' || novel.status === 'extracting' || novel.status === 'selecting' ? 'animate-spin' : ''}`} />
+          <Icon className={`w-3 h-3 ${isProcessing ? 'animate-spin' : ''}`} />
           {config.label}
         </div>
       </div>
 
-      {/* 产出摘要 */}
+      {/* 处理完成：显示文风/情节状态 */}
       {novel.status === 'ready' && (
         <div className="flex gap-2 mt-2 text-xs text-muted-foreground">
-          {novel.slices && <span>{novel.slices.length}切片</span>}
-          {novel.styleProfile && <span>文风✓</span>}
-          {novel.plotReport && <span>情节✓</span>}
-          {novel.representativeSamples && <span>{novel.representativeSamples.length}样本</span>}
+          <span className="text-green-600 dark:text-green-400">文风✓</span>
+          <span className="text-green-600 dark:text-green-400">情节✓</span>
+        </div>
+      )}
+
+      {/* 出错状态 */}
+      {novel.status === 'error' && (
+        <div className="mt-2 text-xs text-red-500">
+          处理失败，可重新处理
         </div>
       )}
     </div>

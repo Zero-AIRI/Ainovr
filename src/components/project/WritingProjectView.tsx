@@ -123,10 +123,6 @@ export function WritingProjectView() {
       toast.error('请输入项目名称');
       return;
     }
-    if (selectedSourceIds.length === 0) {
-      toast.error('请至少选择一本源小说');
-      return;
-    }
 
     const id = nanoid();
     const sourceRoles: SourceRole[] = selectedSourceIds.map((sid) => ({
@@ -201,7 +197,7 @@ export function WritingProjectView() {
 
         <button
           onClick={handleCreate}
-          disabled={!title.trim() || selectedSourceIds.length === 0}
+          disabled={!title.trim()}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           <Plus className="w-4 h-4" />

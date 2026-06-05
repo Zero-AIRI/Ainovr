@@ -22,7 +22,8 @@ interface ResultCardProps {
 }
 
 function ResultCard({ novel, type, onViewDetail }: ResultCardProps) {
-  const hasContent = type === 'style' ? !!novel.styleProfile : !!novel.plotReport;
+  // list API 不返回完整内容，用 status 判断是否有结果
+  const hasContent = novel.status === 'ready';
   const label = type === 'style' ? '文风档案' : '情节报告';
 
   return (
@@ -75,7 +76,7 @@ export function StylePlotLibraryView() {
 
   // 只显示已处理或有部分结果的小说
   const processedNovels = sourceNovels.filter(
-    (n) => n.status === 'ready' || n.status === 'extracting' || !!n.styleProfile || !!n.plotReport
+    (n) => n.status === 'ready' || n.status === 'extracting' || n.status === 'selecting'
   );
 
   const handleViewDetail = (novelId: string) => {
