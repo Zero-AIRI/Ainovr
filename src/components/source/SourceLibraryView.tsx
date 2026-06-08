@@ -50,10 +50,17 @@ export function SourceLibraryView() {
           status: 'raw',
           createdAt: new Date().toISOString(),
           processedAt: null,
+          memory: null,
           slices: null,
           styleProfile: null,
           plotReport: null,
+          characterDynamics: null,
+          readerExperience: null,
+          narrativeConstraints: null,
           representativeSamples: null,
+          evolutionModel: null,
+          novelDna: null,
+          novelGenome: null,
         };
 
         const res = await fetch('/api/library/upload', {
@@ -93,6 +100,24 @@ export function SourceLibraryView() {
       toast.success('已删除');
     } catch (err) {
       toast.error('删除失败');
+    }
+  }, []);
+
+  const handleRename = useCallback(async (id: string, newTitle: string) => {
+    try {
+      const res = await fetch('/api/library/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, title: newTitle }),
+      });
+      if (res.ok) {
+        useSourceLibraryStore.getState().updateSourceNovel(id, { title: newTitle });
+        toast.success('已重命名');
+      } else {
+        toast.error('重命名失败');
+      }
+    } catch (err) {
+      toast.error('重命名失败');
     }
   }, []);
 
@@ -175,6 +200,8 @@ export function SourceLibraryView() {
                     key={novel.id}
                     novel={novel}
                     onClick={() => handleOpenDetail(novel.id)}
+                    onRename={handleRename}
+                    onDelete={handleDelete}
                   />
                 ))}
               </div>

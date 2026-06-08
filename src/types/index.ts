@@ -63,16 +63,89 @@ export interface ParsedNovel {
 // 素材库（Source Library）
 // ========================================
 
+// ---- Novel Memory System（Step -1 产出）----
+
+/** 实体类型 */
+export type EntityType = 'character' | 'location' | 'organization' | 'artifact' | 'concept';
+
+/** 实体索引条目（Step -1A 产出） */
+export interface EntityEntry {
+  type: EntityType;
+  aliases: string[];
+  frequency: number;
+  occurrences: string[];  // 出现的 slice IDs
+  segments: string[];     // 出现的 segment IDs
+}
+
+/** 实体索引 */
+export type EntityIndex = Record<string, EntityEntry>;
+
+/** 叙事段（Step -1B 产出） */
+export interface NarrativeSegment {
+  id: string;               // e.g. "segment_1"
+  label: string;            // e.g. "廷根探索"
+  startSlice: number;
+  endSlice: number;
+  startChapter: string;
+  endChapter: string;
+  charCount: number;
+  primaryDriver: string;
+  primaryMysteries: string[];
+  primaryCharacters: string[];
+  worldState: string;
+  emotionBaseline: string;
+  transitionReason: string | null;
+}
+
+/** 图节点 */
+export interface GraphNode {
+  id: string;
+  type: string;
+  frequency: number;
+  segments: string[];
+}
+
+/** 图边 */
+export interface GraphEdge {
+  source: string;
+  target: string;
+  type: string;               // causes / reveals / parallels / contradicts / depends_on / co_occurrence
+  coOccurrenceCount?: number;
+  segments?: string[];
+  evidence?: string;
+}
+
+/** 记忆图谱 */
+export interface MemoryGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/** Novel Memory 整体（Step -1 全部产出） */
+export interface NovelMemory {
+  entityIndex: EntityIndex | null;
+  segments: NarrativeSegment[] | null;
+  characterGraph: MemoryGraph | null;
+  mysteryGraph: MemoryGraph | null;
+  eventGraph: MemoryGraph | null;
+}
+
 /** 源小说处理状态 */
 export type SourceNovelStatus =
-  | 'raw'        // 已上传，未处理
-  | 'slicing'    // Step 1: 智能切片中
-  | 'extracting' // Step 2: 文风+情节提取中
-  | 'selecting'  // Step 3: 代表性切片选取中
-  | 'ready'      // 全部处理完成，可被项目引用
-  | 'error';     // 处理出错
+  | 'raw'                // 已上传，未处理
+  | 'indexing'           // Step -1A: 程序索引中
+  | 'segmenting'         // Step -1B: 叙事分段中
+  | 'slicing'            // Step 0: 智能切片中
+  | 'extracting'         // Step 1+2: 文风+叙事动力学提取中
+  | 'character_dynamics' // Step 2.5: 角色动力学分析中
+  | 'deep_analyzing'     // Step 3+4: 读者体验+叙事约束分析中
+  | 'selecting'          // Step 5: 代表性切片选取中
+  | 'evolution_modeling' // Step 6.5: 演化建模中
+  | 'compressing'        // Step 7: DNA+Genome 压缩中
+  | 'ready'              // 全部处理完成，可被项目引用
+  | 'error';             // 处理出错
 
-/** AI 智能切片（替代硬分块 NovelChunk） */
+/** AI 智能切片（增强版，含 Memory Graph 引用） */
 export interface SemanticSlice {
   id: string;
   index: number;
@@ -82,6 +155,15 @@ export interface SemanticSlice {
   semanticTags: string[];  // e.g. ["战斗", "修炼", "转折"]
   plotArc: string;         // 所属情节弧线
   emotionalTone: string;   // e.g. "紧张", "温馨"
+
+  // 增强字段（从 Novel Memory 填充）
+  segmentId: string;              // 属于哪个 NarrativeSegment
+  volume: string | null;          // 属于哪一卷
+  chapterRange: string;           // 章节范围 e.g. "第1章-第12章"
+  characterRefs: string[];        // 出现的角色名（引用 entity_index）
+  narrativeFunction: string;      // setup / escalation / climax / cooldown / resolution
+  tensionLevel: number;           // 0-10
+  dependencies: string[];         // 依赖的其他切片 IDs
 }
 
 /** 代表性切片样本（3-5 个） */
@@ -103,11 +185,20 @@ export interface SourceNovel {
   createdAt: string;
   processedAt: string | null;
 
+  // Novel Memory（Step -1 产出）
+  memory: NovelMemory | null;
+
   // 处理产出（null 表示尚未处理到该步）
-  slices: SemanticSlice[] | null;
-  styleProfile: string | null;             // style_profile.md 内容
-  plotReport: string | null;               // plot_report.md 内容
-  representativeSamples: RepresentativeSample[] | null;
+  slices: SemanticSlice[] | null;                      // Step 0: 增强切片
+  styleProfile: string | null;                         // Step 1: 文风画像
+  plotReport: string | null;                           // Step 2: 叙事动力学
+  characterDynamics: string | null;                    // Step 2.5: 角色动力学
+  readerExperience: string | null;                     // Step 3: 读者体验
+  narrativeConstraints: string | null;                 // Step 4: 叙事约束
+  representativeSamples: RepresentativeSample[] | null; // Step 5: 样本
+  evolutionModel: string | null;                       // Step 6.5: 演化模型 JSON
+  novelDna: string | null;                             // Step 7: DNA 超压缩 YAML
+  novelGenome: string | null;                          // Step 7: Genome 完整基因库 YAML
 }
 
 // ========================================
@@ -252,11 +343,22 @@ export interface GeneratedChapter {
 
 /** 管线任务类型 */
 export type PipelineTaskType =
-  // 素材库处理
+  // 素材库处理 — 基础设施层
+  | 'program_indexing'
+  | 'entity_classification'
+  | 'narrative_segmentation'
+  | 'memory_graph_build'
+  // 素材库处理 — 分析层
   | 'smart_slicing'
   | 'style_extraction'
-  | 'plot_extraction'
+  | 'narrative_dynamics_extraction'
+  | 'character_dynamics_extraction'
+  | 'reader_experience_extraction'
+  | 'narrative_constraints_extraction'
   | 'sample_selection'
+  | 'evolution_modeling'
+  | 'dna_compression'
+  | 'genome_compression'
   // 五层生成
   | 'outline_generation'
   | 'phase_framework'

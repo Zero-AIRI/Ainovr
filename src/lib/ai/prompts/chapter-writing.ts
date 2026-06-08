@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是根据章节计划和上下文，生成章节正文。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是根据章节计划和上下文，生成章节正文。
 
 生成前上下文包含：
 1. 风格指导（文风档案 + 情节规律报告）

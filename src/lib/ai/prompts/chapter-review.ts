@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是对生成的章节正文进行 5 维度审查。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是对生成的章节正文进行 5 维度审查。
 
 审查维度：
 1. style_consistency（文风一致性）：是否与目标文风档案一致

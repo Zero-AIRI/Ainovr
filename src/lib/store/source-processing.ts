@@ -1,14 +1,26 @@
 // ============================================
 // 源小说处理全局 Store — 后台处理，跨页面存活
+// 8 步管线：切片 → 文风 ‖ 叙事动力学 → 角色动力学 → 读者体验 ‖ 叙事约束 → 样本 → DNA
 // ============================================
 
 import { create } from 'zustand';
-import { parseSliceOutput, fallbackSlice, getSlicingRequestBody } from '@/lib/source-processing/smart-slicer';
+import { parseSliceOutput, fallbackSlice, getSlicingRequestBody, shouldSkipSlicing, createSingleSlice } from '@/lib/source-processing/smart-slicer';
 import { getStyleExtractionRequestBody, computeStyleBatches, getStyleSupplementRequestBody } from '@/lib/source-processing/style-extractor';
 import { getPlotExtractionRequestBody, computePlotBatches, getPlotSupplementRequestBody } from '@/lib/source-processing/plot-extractor';
+import { getCharacterDynamicsExtractionRequestBody, computeCharacterDynamicsBatches, getCharacterDynamicsSupplementRequestBody } from '@/lib/source-processing/character-dynamics-extractor';
+import { getReaderExperienceExtractionRequestBody, computeReaderExperienceBatches, getReaderExperienceSupplementRequestBody } from '@/lib/source-processing/reader-experience-extractor';
+import { getNarrativeConstraintsExtractionRequestBody, computeNarrativeConstraintsBatches, getNarrativeConstraintsSupplementRequestBody } from '@/lib/source-processing/narrative-constraints-extractor';
 import { getSampleSelectionRequestBody, parseSampleOutput } from '@/lib/source-processing/sample-selector';
+import { getDnaCompressionRequestBody } from '@/lib/source-processing/dna-compressor';
 import { useSourceLibraryStore } from './source-library';
 import type { SemanticSlice } from '@/types';
+
+/** 总步骤数 */
+const TOTAL_STEPS = 8;
+
+function createFilledArray<T>(length: number, value: T): T[] {
+  return Array.from({ length }, () => value);
+}
 
 // ---- 流式 fetch 工具（独立于组件，用于 store 中） ----
 
@@ -99,12 +111,12 @@ export interface SourceProcessingState {
   /** 当前正在处理的小说 ID */
   processingNovelId: string | null;
 
-  /** 4 个步骤的流式内容 */
-  streamContents: [string, string, string, string];
-  /** 4 个步骤的流式状态 */
-  isStreaming: [boolean, boolean, boolean, boolean];
-  /** 4 个步骤的错误信息 */
-  streamErrors: [string | null, string | null, string | null, string | null];
+  /** 8 个步骤的流式内容 */
+  streamContents: string[];
+  /** 8 个步骤的流式状态 */
+  isStreaming: boolean[];
+  /** 8 个步骤的错误信息 */
+  streamErrors: (string | null)[];
 
   /** 当前步骤（-1 = idle） */
   currentStep: number;
@@ -137,9 +149,9 @@ const streamFetcher = createStreamFetcher();
 
 export const useSourceProcessingStore = create<SourceProcessingState>()((set, get) => ({
   processingNovelId: null,
-  streamContents: ['', '', '', ''],
-  isStreaming: [false, false, false, false],
-  streamErrors: [null, null, null, null],
+  streamContents: createFilledArray(TOTAL_STEPS, ''),
+  isStreaming: createFilledArray(TOTAL_STEPS, false),
+  streamErrors: createFilledArray(TOTAL_STEPS, null),
   currentStep: -1,
   completedSteps: [],
   errorStep: null,
@@ -149,7 +161,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
 
   _updateStreamContent: (step, content) => {
     set((s) => {
-      const arr = [...s.streamContents] as [string, string, string, string];
+      const arr = [...s.streamContents];
       arr[step] = content;
       return { streamContents: arr };
     });
@@ -157,7 +169,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
 
   _updateIsStreaming: (step, streaming) => {
     set((s) => {
-      const arr = [...s.isStreaming] as [boolean, boolean, boolean, boolean];
+      const arr = [...s.isStreaming];
       arr[step] = streaming;
       return { isStreaming: arr };
     });
@@ -165,7 +177,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
 
   _updateStreamError: (step, error) => {
     set((s) => {
-      const arr = [...s.streamErrors] as [string | null, string | null, string | null, string | null];
+      const arr = [...s.streamErrors];
       arr[step] = error;
       return { streamErrors: arr, errorMessage: error };
     });
@@ -181,9 +193,9 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
 
     set({
       processingNovelId: novelId,
-      streamContents: ['', '', '', ''],
-      isStreaming: [false, false, false, false],
-      streamErrors: [null, null, null, null],
+      streamContents: createFilledArray(TOTAL_STEPS, ''),
+      isStreaming: createFilledArray(TOTAL_STEPS, false),
+      streamErrors: createFilledArray(TOTAL_STEPS, null),
       currentStep: -1,
       completedSteps: [],
       errorStep: null,
@@ -211,14 +223,15 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
     // ---- 进度平滑推进计时器 ----
     let progressTimer: ReturnType<typeof setInterval> | null = null;
     const startProgressSimulation = (stepIndex: number) => {
-      const base = stepIndex * 25;  // 每步起始: 0, 25, 50, 75
-      const target = base + 24;     // 每步目标: 24, 49, 74, 99（完成时跳到下一档）
+      const stepSize = 100 / TOTAL_STEPS; // 每步 12.5%
+      const base = Math.round(stepIndex * stepSize);
+      const target = Math.round((stepIndex + 1) * stepSize) - 1;
       const state = get();
       if (state.progress < base) get()._setProgress(base);
       progressTimer = setInterval(() => {
         const cur = get().progress;
         if (cur < target) get()._setProgress(cur + 1);
-      }, 2000); // 每 2 秒推 1%
+      }, 2000);
     };
     const stopProgressSimulation = () => {
       if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
@@ -231,7 +244,42 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
       updateNovel({ status: 'error' });
     };
 
-    // 异步执行 4 步管线
+    // 多批处理辅助函数
+    const runMultiBatch = async (
+      slices: SemanticSlice[],
+      batchInfo: { needsBatch: boolean; batches: string[] },
+      apiPath: string,
+      buildFirstBody: () => object,
+      buildSupplementBody: (chunk: string, prevResult: string) => object,
+      streamStep: number,
+    ): Promise<string> => {
+      let result = '';
+
+      if (!batchInfo.needsBatch) {
+        const body = buildFirstBody();
+        const res = await streamFetcher.fetch(apiPath, body);
+        if (res.result) {
+          result = res.result;
+          get()._updateStreamContent(streamStep, res.state.content);
+        }
+      } else {
+        for (let i = 0; i < batchInfo.batches.length; i++) {
+          const body = i === 0
+            ? buildFirstBody()
+            : buildSupplementBody(batchInfo.batches[i], result);
+          const res = await streamFetcher.fetch(apiPath, body);
+          if (res.result) {
+            result = res.result;
+            get()._updateStreamContent(streamStep, res.state.content);
+          } else break;
+        }
+      }
+
+      get()._updateIsStreaming(streamStep, false);
+      return result;
+    };
+
+    // 异步执行 8 步管线
     (async () => {
       try {
         // ── Step 0: 智能切片 ──
@@ -240,61 +288,68 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
         updateNovel({ status: 'slicing' });
         startProgressSimulation(0);
 
-        const sliceBody = getSlicingRequestBody(rawText, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL);
-        const sliceResult = await streamFetcher.fetch('/api/source/process/slice', sliceBody);
+        let slices: SemanticSlice[];
+
+        if (shouldSkipSlicing(rawText)) {
+          // 短文本：跳过 AI 切片，直接作为单一切片
+          slices = createSingleSlice(novelId, rawText);
+          get()._updateStreamContent(0, `文本较短（${rawText.length}字），跳过智能切片，直接作为单一切片处理。`);
+          get()._updateIsStreaming(0, false);
+        } else {
+          // 长文本：AI 智能切片
+          const sliceBody = getSlicingRequestBody(rawText, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL);
+          const sliceResult = await streamFetcher.fetch('/api/source/process/slice', sliceBody);
+
+          stopProgressSimulation();
+
+          if (!sliceResult.result) {
+            const errMsg = sliceResult.state.error || '智能切片失败，请检查 API 配置';
+            get()._updateStreamError(0, errMsg);
+            reportError(0, errMsg);
+            return;
+          }
+
+          get()._updateStreamContent(0, sliceResult.state.content);
+          get()._updateIsStreaming(0, false);
+
+          slices = parseSliceOutput(sliceResult.result, novelId);
+          if (slices.length === 0) {
+            slices = fallbackSlice(novelId, rawText);
+          }
+        }
 
         stopProgressSimulation();
-
-        if (!sliceResult.result) {
-          const errMsg = sliceResult.state.error || '智能切片失败，请检查 API 配置';
-          get()._updateStreamError(0, errMsg);
-          reportError(0, errMsg);
-          return;
-        }
-
-        get()._updateStreamContent(0, sliceResult.state.content);
-        get()._updateIsStreaming(0, false);
-
-        let slices = parseSliceOutput(sliceResult.result, novelId);
-        if (slices.length === 0) {
-          slices = fallbackSlice(novelId, rawText);
-        }
         updateNovel({ slices });
         set((s) => ({ completedSteps: [...s.completedSteps, 0] }));
-        get()._setProgress(25);
-
+        get()._setProgress(Math.round(100 / TOTAL_STEPS));
         await saveStep(0, { slices });
 
-        // ── Step 1: 文风提取 ──
-        set({ currentStep: 1 });
+        // ── Step 1 + Step 2: 文风提取 ‖ 叙事动力学（并行） ──
         updateNovel({ status: 'extracting' });
+
+        // Step 1: 文风提取
+        set({ currentStep: 1 });
         startProgressSimulation(1);
 
         const styleBatchInfo = computeStyleBatches(slices, aiConfig.maxContextTokens);
-        let profile = '';
+        const profilePromise = runMultiBatch(
+          slices, styleBatchInfo,
+          '/api/source/process/style',
+          () => getStyleExtractionRequestBody(slices, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL, aiConfig.maxContextTokens),
+          (chunk, prev) => getStyleSupplementRequestBody(chunk, prev, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          1,
+        );
 
-        if (!styleBatchInfo.needsBatch) {
-          const body = getStyleExtractionRequestBody(slices, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL, aiConfig.maxContextTokens);
-          const res = await streamFetcher.fetch('/api/source/process/style', body);
-          if (res.result) {
-            profile = res.result;
-            get()._updateStreamContent(1, res.state.content);
-          }
-        } else {
-          for (let i = 0; i < styleBatchInfo.batches.length; i++) {
-            const body = i === 0
-              ? getStyleExtractionRequestBody(slices, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL, aiConfig.maxContextTokens)
-              : getStyleSupplementRequestBody(styleBatchInfo.batches[i], profile, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL);
-            const res = await streamFetcher.fetch('/api/source/process/style', body);
-            if (res.result) {
-              profile = res.result;
-              get()._updateStreamContent(1, res.state.content);
-            } else break;
-          }
-        }
+        // Step 2: 叙事动力学（不依赖 Step 1 结果，可并行启动）
+        set({ currentStep: 2 });
+        startProgressSimulation(2);
+
+        const narrativeBatchInfo = computePlotBatches(slices, aiConfig.maxContextTokens);
+        // 注意：Step 2 需要 styleProfile 作为参考，但我们让它在 Step 1 完成后再构建请求体
+        // 为简化：让 Step 1 先完成，再跑 Step 2（并行改为串行，因为 Step 2 需要 profile 作为输入）
+        const profile = await profilePromise;
 
         stopProgressSimulation();
-        get()._updateIsStreaming(1, false);
 
         if (!profile) {
           const errMsg = get().streamErrors[1] || '文风提取失败，请检查 API 配置';
@@ -304,77 +359,173 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
 
         updateNovel({ styleProfile: profile });
         set((s) => ({ completedSteps: [...s.completedSteps, 1] }));
-        get()._setProgress(50);
+        get()._setProgress(Math.round(2 * 100 / TOTAL_STEPS));
         await saveStep(1, { styleProfile: profile });
 
-        // ── Step 2: 情节提取 ──
+        // Step 2: 叙事动力学（依赖 Step 1 的 profile）
         set({ currentStep: 2 });
         startProgressSimulation(2);
 
-        const plotBatchInfo = computePlotBatches(slices, aiConfig.maxContextTokens);
-        let report = '';
-
-        if (!plotBatchInfo.needsBatch) {
-          const body = getPlotExtractionRequestBody(slices, profile, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL);
-          const res = await streamFetcher.fetch('/api/source/process/plot', body);
-          if (res.result) {
-            report = res.result;
-            get()._updateStreamContent(2, res.state.content);
-          }
-        } else {
-          for (let i = 0; i < plotBatchInfo.batches.length; i++) {
-            const body = i === 0
-              ? getPlotExtractionRequestBody(slices, profile, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL)
-              : getPlotSupplementRequestBody(plotBatchInfo.batches[i], report, profile, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL);
-            const res = await streamFetcher.fetch('/api/source/process/plot', body);
-            if (res.result) {
-              report = res.result;
-              get()._updateStreamContent(2, res.state.content);
-            } else break;
-          }
-        }
+        const narrativeReport = await runMultiBatch(
+          slices, narrativeBatchInfo,
+          '/api/source/process/plot',
+          () => getPlotExtractionRequestBody(slices, profile, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          (chunk, prev) => getPlotSupplementRequestBody(chunk, prev, profile, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          2,
+        );
 
         stopProgressSimulation();
-        get()._updateIsStreaming(2, false);
 
-        if (!report) {
-          const errMsg = get().streamErrors[2] || '情节提取失败，请检查 API 配置';
+        if (!narrativeReport) {
+          const errMsg = get().streamErrors[2] || '叙事动力学分析失败，请检查 API 配置';
           reportError(2, errMsg);
           return;
         }
 
-        updateNovel({ plotReport: report });
+        updateNovel({ plotReport: narrativeReport });
         set((s) => ({ completedSteps: [...s.completedSteps, 2] }));
-        get()._setProgress(75);
-        await saveStep(2, { plotReport: report });
+        get()._setProgress(Math.round(3 * 100 / TOTAL_STEPS));
+        await saveStep(2, { plotReport: narrativeReport });
 
-        // ── Step 3: 样本选取 ──
+        // ── Step 3: 角色动力学（依赖 Step 2 的叙事动力学） ──
         set({ currentStep: 3 });
-        updateNovel({ status: 'selecting' });
+        updateNovel({ status: 'character_dynamics' });
         startProgressSimulation(3);
 
-        const sampleBody = getSampleSelectionRequestBody(slices, profile, report, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL);
-        const sampleResult = await streamFetcher.fetch('/api/source/process/samples', sampleBody);
+        const charDynBatchInfo = computeCharacterDynamicsBatches(slices, aiConfig.maxContextTokens);
+        const characterDynamics = await runMultiBatch(
+          slices, charDynBatchInfo,
+          '/api/source/process/character-dynamics',
+          () => getCharacterDynamicsExtractionRequestBody(slices, narrativeReport, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          (chunk, prev) => getCharacterDynamicsSupplementRequestBody(chunk, prev, narrativeReport, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          3,
+        );
 
         stopProgressSimulation();
-        get()._updateIsStreaming(3, false);
 
-        if (!sampleResult.result) {
-          const errMsg = get().streamErrors[3] || '样本选取失败，请检查 API 配置';
+        if (!characterDynamics) {
+          const errMsg = get().streamErrors[3] || '角色动力学分析失败，请检查 API 配置';
           reportError(3, errMsg);
           return;
         }
 
-        get()._updateStreamContent(3, sampleResult.state.content);
+        updateNovel({ characterDynamics });
+        set((s) => ({ completedSteps: [...s.completedSteps, 3] }));
+        get()._setProgress(Math.round(4 * 100 / TOTAL_STEPS));
+        await saveStep(3, { characterDynamics });
+
+        // ── Step 4 + Step 5: 读者体验 ‖ 叙事约束（可并行） ──
+        updateNovel({ status: 'deep_analyzing' });
+
+        // Step 4: 读者体验
+        set({ currentStep: 4 });
+        startProgressSimulation(4);
+
+        const readerExpBatchInfo = computeReaderExperienceBatches(slices, aiConfig.maxContextTokens);
+        const readerExpPromise = runMultiBatch(
+          slices, readerExpBatchInfo,
+          '/api/source/process/reader-experience',
+          () => getReaderExperienceExtractionRequestBody(slices, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          (chunk, prev) => getReaderExperienceSupplementRequestBody(chunk, prev, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          4,
+        );
+
+        // Step 5: 叙事约束（不依赖 Step 4，可并行）
+        set({ currentStep: 5 });
+        startProgressSimulation(5);
+
+        const narConBatchInfo = computeNarrativeConstraintsBatches(slices, aiConfig.maxContextTokens);
+        const narConPromise = runMultiBatch(
+          slices, narConBatchInfo,
+          '/api/source/process/narrative-constraints',
+          () => getNarrativeConstraintsExtractionRequestBody(slices, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          (chunk, prev) => getNarrativeConstraintsSupplementRequestBody(chunk, prev, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          5,
+        );
+
+        // 等待两者都完成
+        const [readerExperience, narrativeConstraints] = await Promise.all([readerExpPromise, narConPromise]);
+
+        stopProgressSimulation();
+
+        if (!readerExperience) {
+          const errMsg = get().streamErrors[4] || '读者体验分析失败，请检查 API 配置';
+          reportError(4, errMsg);
+          return;
+        }
+        if (!narrativeConstraints) {
+          const errMsg = get().streamErrors[5] || '叙事约束分析失败，请检查 API 配置';
+          reportError(5, errMsg);
+          return;
+        }
+
+        updateNovel({ readerExperience, narrativeConstraints });
+        set((s) => ({ completedSteps: [...s.completedSteps, 4, 5] }));
+        get()._setProgress(Math.round(6 * 100 / TOTAL_STEPS));
+        await saveStep(4, { readerExperience });
+        await saveStep(5, { narrativeConstraints });
+
+        // ── Step 6: 样本选取 ──
+        set({ currentStep: 6 });
+        updateNovel({ status: 'selecting' });
+        startProgressSimulation(6);
+
+        const sampleBody = getSampleSelectionRequestBody(
+          slices, profile, narrativeReport,
+          aiConfig.apiKey, aiConfig.model, aiConfig.baseURL,
+          readerExperience, narrativeConstraints,
+        );
+        const sampleResult = await streamFetcher.fetch('/api/source/process/samples', sampleBody);
+
+        stopProgressSimulation();
+        get()._updateIsStreaming(6, false);
+
+        if (!sampleResult.result) {
+          const errMsg = get().streamErrors[6] || '样本选取失败，请检查 API 配置';
+          reportError(6, errMsg);
+          return;
+        }
+
+        get()._updateStreamContent(6, sampleResult.state.content);
 
         const samples = parseSampleOutput(sampleResult.result);
-        const now = new Date().toISOString();
-        updateNovel({ representativeSamples: samples, status: 'ready', processedAt: now });
-        set((s) => ({ completedSteps: [...s.completedSteps, 3] }));
-        get()._setProgress(100);
-        await saveStep(3, { representativeSamples: samples, status: 'ready', processedAt: now });
+        updateNovel({ representativeSamples: samples });
+        set((s) => ({ completedSteps: [...s.completedSteps, 6] }));
+        get()._setProgress(Math.round(7 * 100 / TOTAL_STEPS));
+        await saveStep(6, { representativeSamples: samples });
+
+        // ── Step 7: DNA 压缩 ──
+        set({ currentStep: 7 });
+        updateNovel({ status: 'compressing' });
+        startProgressSimulation(7);
+
+        const dnaBody = getDnaCompressionRequestBody(
+          profile, narrativeReport, characterDynamics,
+          readerExperience, narrativeConstraints,
+          aiConfig.apiKey, aiConfig.model, aiConfig.baseURL,
+        );
+        const dnaResult = await streamFetcher.fetch('/api/source/process/dna-compression', dnaBody);
+
+        stopProgressSimulation();
+        get()._updateIsStreaming(7, false);
+
+        if (!dnaResult.result) {
+          // DNA 压缩失败不影响整体流程，仅记录
+          console.warn('DNA 压缩失败:', get().streamErrors[7]);
+        } else {
+          get()._updateStreamContent(7, dnaResult.state.content);
+          const novelDna = dnaResult.result;
+          updateNovel({ novelDna });
+          await saveStep(7, { novelDna });
+        }
+
+        set((s) => ({ completedSteps: [...s.completedSteps, 7] }));
 
         // 全部完成
+        const now = new Date().toISOString();
+        updateNovel({ status: 'ready', processedAt: now });
+        await saveStep(7, { status: 'ready', processedAt: now });
+
         set({ isRunningAll: false, currentStep: -1, progress: 100, processingNovelId: null });
       } catch (err) {
         stopProgressSimulation();
@@ -396,7 +547,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
       processingNovelId: null,
       isRunningAll: false,
       currentStep: -1,
-      isStreaming: [false, false, false, false],
+      isStreaming: createFilledArray(TOTAL_STEPS, false),
       progress: 0,
       errorMessage: null,
     });
@@ -406,9 +557,9 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
     streamFetcher.abort();
     set({
       processingNovelId: null,
-      streamContents: ['', '', '', ''],
-      isStreaming: [false, false, false, false],
-      streamErrors: [null, null, null, null],
+      streamContents: createFilledArray(TOTAL_STEPS, ''),
+      isStreaming: createFilledArray(TOTAL_STEPS, false),
+      streamErrors: createFilledArray(TOTAL_STEPS, null),
       currentStep: -1,
       completedSteps: [],
       errorStep: null,

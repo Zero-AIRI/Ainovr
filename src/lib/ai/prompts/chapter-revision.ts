@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是根据审查结果和（可能的）人工反馈，修正章节正文。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是根据审查结果和（可能的）人工反馈，修正章节正文。
 
 要求：
 - 只修正审查中指出的问题，保持其余部分不变

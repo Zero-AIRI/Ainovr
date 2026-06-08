@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是为指定章节生成详细计划。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是为指定章节生成详细计划。
 
 要求：
 - 约 100 字

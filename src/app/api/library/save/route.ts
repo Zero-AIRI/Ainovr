@@ -33,6 +33,10 @@ export async function POST(req: NextRequest) {
       sliceCount: sourceNovel.slices?.length ?? 0,
       hasStyleProfile: !!sourceNovel.styleProfile,
       hasPlotReport: !!sourceNovel.plotReport,
+      hasCharacterDynamics: !!sourceNovel.characterDynamics,
+      hasReaderExperience: !!sourceNovel.readerExperience,
+      hasNarrativeConstraints: !!sourceNovel.narrativeConstraints,
+      hasNovelDna: !!sourceNovel.novelDna,
       sampleCount: sourceNovel.representativeSamples?.length ?? 0,
     };
     await fs.writeFile(
@@ -64,6 +68,42 @@ export async function POST(req: NextRequest) {
       await fs.writeFile(
         path.join(novelDir, 'plot_report.md'),
         sourceNovel.plotReport,
+        'utf-8',
+      );
+    }
+
+    // character_dynamics.md
+    if (sourceNovel.characterDynamics) {
+      await fs.writeFile(
+        path.join(novelDir, 'character_dynamics.md'),
+        sourceNovel.characterDynamics,
+        'utf-8',
+      );
+    }
+
+    // reader_experience.md
+    if (sourceNovel.readerExperience) {
+      await fs.writeFile(
+        path.join(novelDir, 'reader_experience.md'),
+        sourceNovel.readerExperience,
+        'utf-8',
+      );
+    }
+
+    // narrative_constraints.md
+    if (sourceNovel.narrativeConstraints) {
+      await fs.writeFile(
+        path.join(novelDir, 'narrative_constraints.md'),
+        sourceNovel.narrativeConstraints,
+        'utf-8',
+      );
+    }
+
+    // novel_dna.yaml
+    if (sourceNovel.novelDna) {
+      await fs.writeFile(
+        path.join(novelDir, 'novel_dna.yaml'),
+        sourceNovel.novelDna,
         'utf-8',
       );
     }

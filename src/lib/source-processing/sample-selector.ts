@@ -60,13 +60,17 @@ export function getSampleSelectionRequestBody(
   apiKey: string,
   model: string,
   baseURL: string,
+  readerExperience?: string,
+  narrativeConstraints?: string,
 ) {
   // 只传切片摘要，不传全文（节省 token）
   const slicesSummary = slices
     .map((s) => `- ${s.title} (${s.charCount}字) [${s.semanticTags.join(', ')}] ${s.emotionalTone}`)
     .join('\n');
 
-  const { systemPrompt, userMessage } = buildSampleSelectionMessages(slicesSummary, styleProfile, plotReport);
+  const { systemPrompt, userMessage } = buildSampleSelectionMessages(
+    slicesSummary, styleProfile, plotReport, readerExperience, narrativeConstraints,
+  );
 
   return {
     systemPrompt,

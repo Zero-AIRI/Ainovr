@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是根据阶段规划和小情节模式库，为指定阶段规划分卷框架。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是根据阶段规划和小情节模式库，为指定阶段规划分卷框架。
 
 要求：
 - 每阶段 1-2 卷

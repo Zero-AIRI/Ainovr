@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是为指定卷生成详细规划。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是为指定卷生成详细规划。
 
 要求：
 - 约 300 字

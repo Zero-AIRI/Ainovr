@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是根据全书大纲和节奏/伏笔规则，规划阶段框架。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是根据全书大纲和节奏/伏笔规则，规划阶段框架。
 
 要求：
 - 输出 4-6 个阶段的标题和预估章节范围

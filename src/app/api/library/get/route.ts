@@ -41,11 +41,35 @@ export async function GET(req: NextRequest) {
       styleProfile = await fs.readFile(path.join(novelDir, 'style_profile.md'), 'utf-8');
     } catch { /* style_profile 可能不存在 */ }
 
-    // 读取 plot_report.md
+    // 读取 plot_report.md (叙事动力学，向后兼容)
     let plotReport: string | null = null;
     try {
       plotReport = await fs.readFile(path.join(novelDir, 'plot_report.md'), 'utf-8');
     } catch { /* plot_report 可能不存在 */ }
+
+    // 读取 character_dynamics.md
+    let characterDynamics: string | null = null;
+    try {
+      characterDynamics = await fs.readFile(path.join(novelDir, 'character_dynamics.md'), 'utf-8');
+    } catch { /* character_dynamics 可能不存在 */ }
+
+    // 读取 reader_experience.md
+    let readerExperience: string | null = null;
+    try {
+      readerExperience = await fs.readFile(path.join(novelDir, 'reader_experience.md'), 'utf-8');
+    } catch { /* reader_experience 可能不存在 */ }
+
+    // 读取 narrative_constraints.md
+    let narrativeConstraints: string | null = null;
+    try {
+      narrativeConstraints = await fs.readFile(path.join(novelDir, 'narrative_constraints.md'), 'utf-8');
+    } catch { /* narrative_constraints 可能不存在 */ }
+
+    // 读取 novel_dna.yaml
+    let novelDna: string | null = null;
+    try {
+      novelDna = await fs.readFile(path.join(novelDir, 'novel_dna.yaml'), 'utf-8');
+    } catch { /* novel_dna 可能不存在 */ }
 
     // 读取 samples.json
     let samples = null;
@@ -60,7 +84,11 @@ export async function GET(req: NextRequest) {
       slices,
       styleProfile,
       plotReport,
+      characterDynamics,
+      readerExperience,
+      narrativeConstraints,
       representativeSamples: samples,
+      novelDna,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '读取源小说失败';

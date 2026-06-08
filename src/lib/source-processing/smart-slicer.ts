@@ -55,6 +55,14 @@ export function parseSliceOutput(raw: string, novelId: string): SemanticSlice[] 
         semanticTags,
         plotArc,
         emotionalTone,
+        // 增强字段默认值（后续由 Memory Graph 填充）
+        segmentId: '',
+        volume: null,
+        chapterRange: '',
+        characterRefs: [],
+        narrativeFunction: '',
+        tensionLevel: 0,
+        dependencies: [],
       });
     }
   }
@@ -74,12 +82,25 @@ export function fallbackSlice(novelId: string, fullText: string): SemanticSlice[
     semanticTags: [],
     plotArc: '',
     emotionalTone: '',
+    segmentId: '',
+    volume: null,
+    chapterRange: '',
+    characterRefs: [],
+    narrativeFunction: '',
+    tensionLevel: 0,
+    dependencies: [],
   }));
 }
 
 /** 获取切片 API 的请求体 */
-export function getSlicingRequestBody(rawText: string, apiKey: string, model: string, baseURL: string) {
-  const { systemPrompt, userMessage } = buildSlicingMessages(rawText);
+export function getSlicingRequestBody(
+  rawText: string,
+  apiKey: string,
+  model: string,
+  baseURL: string,
+  targetSliceSize: number = 5000,
+) {
+  const { systemPrompt, userMessage } = buildSlicingMessages(rawText, targetSliceSize);
   return {
     systemPrompt,
     userMessage,
@@ -87,4 +108,34 @@ export function getSlicingRequestBody(rawText: string, apiKey: string, model: st
     model,
     baseURL,
   };
+}
+
+/**
+ * 判断文本是否足够短，可以跳过 AI 切片，直接作为单一切片
+ */
+export function shouldSkipSlicing(rawText: string, targetSliceSize: number = 5000): boolean {
+  return rawText.length <= targetSliceSize * 1.3;
+}
+
+/**
+ * 短文本直接创建单一切片（无需 AI 调用）
+ */
+export function createSingleSlice(novelId: string, rawText: string): SemanticSlice[] {
+  return [{
+    id: `${novelId}-slice-0`,
+    index: 0,
+    title: '全文',
+    content: rawText,
+    charCount: rawText.length,
+    semanticTags: [],
+    plotArc: '全文',
+    emotionalTone: '',
+    segmentId: '',
+    volume: null,
+    chapterRange: '',
+    characterRefs: [],
+    narrativeFunction: '',
+    tensionLevel: 0,
+    dependencies: [],
+  }];
 }

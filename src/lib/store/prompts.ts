@@ -14,13 +14,23 @@ export interface PromptMeta {
 
 /** 所有提示词的注册表 */
 export const PROMPT_REGISTRY: PromptMeta[] = [
-  // 素材库处理
-  { key: 'source-slicing', label: '智能切片', category: '素材处理', description: '按叙事弧线对小说文本进行智能切片' },
-  { key: 'source-style', label: '文风提取', category: '素材处理', description: '6维度分析写作风格特征' },
+  // 素材库处理 — 基础设施层
+  { key: 'entity-classification', label: '实体分类', category: '素材处理', description: 'AI对候选实体列表进行类型分类（character/location/organization/artifact/concept）' },
+  // 素材库处理 — 分析层
+  { key: 'source-slicing', label: '智能切片', category: '素材处理', description: '按叙事弧线对小说文本进行智能切片（可配置目标字数）' },
+  { key: 'source-style', label: '文风提取', category: '素材处理', description: '9维度分析写作风格特征（基础六维+首尾技术+telling/showing+紧张语言标记）' },
   { key: 'source-style-supplement', label: '文风补充', category: '素材处理', description: '多批次处理时补充文风分析' },
-  { key: 'source-plot', label: '情节提取', category: '素材处理', description: '提取大情节框架+小情节模式库+伏笔+节奏' },
-  { key: 'source-plot-supplement', label: '情节补充', category: '素材处理', description: '多批次处理时补充情节分析' },
-  { key: 'source-samples', label: '样本选取', category: '素材处理', description: '精选 3-5 个代表性切片' },
+  { key: 'source-plot', label: '叙事动力学', category: '素材处理', description: '8维叙事动力学分析（大情节+小模式+伏笔+节奏+谜团图谱+翻页驱动+刺激-情绪+高光技术）' },
+  { key: 'source-plot-supplement', label: '叙事动力学补充', category: '素材处理', description: '多批次处理时补充叙事动力学分析' },
+  { key: 'source-character-dynamics', label: '角色动力学', category: '素材处理', description: '角色叙事功能+关系拓扑+角色弧线+角色演化' },
+  { key: 'source-character-dynamics-supplement', label: '角色动力学补充', category: '素材处理', description: '多批次处理时补充角色动力学分析' },
+  { key: 'source-reader-experience', label: '读者体验模型', category: '素材处理', description: '心理缺失模型+高潮势能追踪+势能曲线+综合翻页驱动力' },
+  { key: 'source-reader-experience-supplement', label: '读者体验补充', category: '素材处理', description: '多批次处理时补充读者体验分析' },
+  { key: 'source-narrative-constraints', label: '叙事约束', category: '素材处理', description: '降温机制+结构异常+风险模式+叙事禁忌+交叉审查' },
+  { key: 'source-narrative-constraints-supplement', label: '叙事约束补充', category: '素材处理', description: '多批次处理时补充叙事约束分析' },
+  { key: 'source-evolution-modeling', label: '演化建模', category: '素材处理', description: 'AI自动识别叙事阶段+驱动变迁曲线+谜团密度曲线+世界扩展曲线' },
+  { key: 'source-dna-compression', label: 'DNA压缩', category: '素材处理', description: '双层压缩：DNA超压缩(500字)+Genome完整基因库(5-10K字)' },
+  { key: 'source-samples', label: '样本选取', category: '素材处理', description: '精选 3-5 个代表性切片（含高潮蓄能/情绪转换/异常结构）' },
   // 层级生成
   { key: 'outline', label: '全书大纲', category: '层级生成', description: '基于大情节框架和创作想法生成 ~200 字大纲' },
   { key: 'phase-framework', label: '阶段框架', category: '层级生成', description: '规划 4-6 个阶段的标题和章节范围' },

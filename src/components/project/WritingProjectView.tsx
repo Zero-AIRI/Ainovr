@@ -82,7 +82,7 @@ export function WritingProjectView() {
         </div>
 
         {/* 标签页内容 */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {activeTab === 'settings' && (
             <ProjectSettings
               project={activeProject}
@@ -100,7 +100,7 @@ export function WritingProjectView() {
             />
           )}
           {activeTab === 'layers' && (
-            <LayerGenerationView embedded />
+            <LayerGenerationView embedded key={activeProjectId} />
           )}
           {activeTab === 'chapters' && (
             <ChapterGenerationView embedded />
@@ -215,7 +215,7 @@ export function WritingProjectView() {
             <div
               key={project.id}
               onClick={() => handleOpenProject(project)}
-              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-accent/50 transition-colors cursor-pointer group"
+              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-accent/50 transition-colors cursor-pointer"
             >
               <FolderOpen className="w-4 h-4 text-primary shrink-0" />
               <div className="flex-1 min-w-0">

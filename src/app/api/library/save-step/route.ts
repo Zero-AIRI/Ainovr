@@ -52,18 +52,51 @@ export async function POST(req: NextRequest) {
         }
         break;
       }
-      case 2: { // 情节
+      case 2: { // 叙事动力学（原情节提取）
         if (data.plotReport) {
           await fs.writeFile(
             path.join(novelDir, 'plot_report.md'),
             data.plotReport,
             'utf-8',
           );
-          meta = { ...meta, hasPlotReport: true };
+          meta = { ...meta, hasPlotReport: true, hasNarrativeDynamics: true };
         }
         break;
       }
-      case 3: { // 样本
+      case 3: { // 角色动力学
+        if (data.characterDynamics) {
+          await fs.writeFile(
+            path.join(novelDir, 'character_dynamics.md'),
+            data.characterDynamics,
+            'utf-8',
+          );
+          meta = { ...meta, hasCharacterDynamics: true, status: 'character_dynamics' };
+        }
+        break;
+      }
+      case 4: { // 读者体验
+        if (data.readerExperience) {
+          await fs.writeFile(
+            path.join(novelDir, 'reader_experience.md'),
+            data.readerExperience,
+            'utf-8',
+          );
+          meta = { ...meta, hasReaderExperience: true };
+        }
+        break;
+      }
+      case 5: { // 叙事约束
+        if (data.narrativeConstraints) {
+          await fs.writeFile(
+            path.join(novelDir, 'narrative_constraints.md'),
+            data.narrativeConstraints,
+            'utf-8',
+          );
+          meta = { ...meta, hasNarrativeConstraints: true };
+        }
+        break;
+      }
+      case 6: { // 样本选取
         if (data.representativeSamples) {
           await fs.writeFile(
             path.join(novelDir, 'samples.json'),
@@ -73,6 +106,20 @@ export async function POST(req: NextRequest) {
           meta = {
             ...meta,
             sampleCount: data.representativeSamples.length,
+          };
+        }
+        break;
+      }
+      case 7: { // DNA 压缩
+        if (data.novelDna) {
+          await fs.writeFile(
+            path.join(novelDir, 'novel_dna.yaml'),
+            data.novelDna,
+            'utf-8',
+          );
+          meta = {
+            ...meta,
+            hasNovelDna: true,
             status: data.status || 'ready',
             processedAt: data.processedAt || new Date().toISOString(),
           };

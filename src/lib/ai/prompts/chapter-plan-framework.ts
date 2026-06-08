@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是根据章节集合规划，为每章生成计划框架。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是根据章节集合规划，为每章生成计划框架。
 
 要求：
 - 输出每章的标题、对应的小情节模式（如适用）、情节关键词

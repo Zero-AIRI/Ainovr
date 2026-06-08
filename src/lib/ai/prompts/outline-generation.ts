@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你的任务是根据大情节框架和用户的创作想法，生成一份全书大纲。
+export const DEFAULT_SYSTEM_PROMPT = `你的任务是根据大情节框架和用户的创作想法，生成一份全书大纲。
 
 要求：
 - 约 200 字
