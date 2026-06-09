@@ -4,7 +4,7 @@
 
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Trash2, FolderOpen, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
@@ -86,7 +86,6 @@ export function WritingProjectView() {
           {activeTab === 'settings' && (
             <ProjectSettings
               project={activeProject}
-              readyNovels={readyNovels}
               onClose={() => setActiveProjectId(null)}
               onDelete={async (id) => {
                 await fetch('/api/project/delete', {
@@ -103,7 +102,7 @@ export function WritingProjectView() {
             <LayerGenerationView embedded key={activeProjectId} />
           )}
           {activeTab === 'chapters' && (
-            <ChapterGenerationView embedded />
+            <ChapterGenerationView embedded key={activeProjectId} />
           )}
         </div>
       </div>
@@ -251,12 +250,10 @@ export function WritingProjectView() {
 
 function ProjectSettings({
   project,
-  readyNovels,
   onClose,
   onDelete,
 }: {
   project: WritingProject;
-  readyNovels: { id: string; title: string; status: string }[];
   onClose: () => void;
   onDelete: (id: string) => void;
 }) {

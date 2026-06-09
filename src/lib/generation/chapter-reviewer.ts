@@ -2,16 +2,17 @@
 // 章节自动审查 — 5 维度评分
 // ============================================
 
-import type { ChapterPlan, ChapterReview, GeneratedChapter, ReviewDimension, SourceNovel, WritingProject } from '@/types';
+import type { ChapterReview, ReviewDimension } from '@/types';
+import { buildChapterReviewMessages, buildChapterRevisionMessages } from '@/lib/ai/prompts';
 
-/** 审查维度列表 */
-const REVIEW_DIMENSIONS: ReviewDimension[] = [
+/** 合法的审查维度集合，用于过滤 LLM 异常输出 */
+const VALID_DIMENSIONS: ReadonlySet<string> = new Set([
   'style_consistency',
   'plot_coherence',
   'pacing',
   'pattern_execution',
   'foreshadow_execution',
-];
+]);
 
 /** 解析 AI 审查输出为 ChapterReview[] */
 export function parseReviewOutput(raw: string): ChapterReview[] {
@@ -24,7 +25,8 @@ export function parseReviewOutput(raw: string): ChapterReview[] {
     if (!Array.isArray(parsed)) return [];
 
     return parsed
-      .filter((item: Record<string, unknown>) => item.dimension && typeof item.score === 'number')
+      .filter((item: Record<string, unknown>) =>
+        item.dimension && typeof item.dimension === 'string' && VALID_DIMENSIONS.has(item.dimension) && typeof item.score === 'number')
       .map((item: Record<string, unknown>, index: number) => ({
         id: `review-${index}`,
         dimension: item.dimension as ReviewDimension,
@@ -49,7 +51,6 @@ export function getReviewRequestBody(
   model: string,
   baseURL: string,
 ) {
-  const { buildChapterReviewMessages } = require('@/lib/ai/prompts');
   const { systemPrompt, userMessage } = buildChapterReviewMessages(chapterContent, styleGuide, chapterTask);
   return { systemPrompt, userMessage, apiKey, model, baseURL };
 }
@@ -67,7 +68,6 @@ export function getRevisionRequestBody(
   model: string,
   baseURL: string,
 ) {
-  const { buildChapterRevisionMessages } = require('@/lib/ai/prompts');
   const reviewsText = reviews
     .map((r) => `- ${r.dimension}: ${r.score}/10\n  问题: ${r.issues.join('; ') || '无'}\n  建议: ${r.suggestions.join('; ') || '无'}`)
     .join('\n');

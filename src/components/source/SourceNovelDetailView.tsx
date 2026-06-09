@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Play, Loader2, XCircle, AlertTriangle, RotateCcw, Dna } from 'lucide-react';
+import { toast } from 'sonner';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { useSourceProcessingStore } from '@/lib/store/source-processing';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -98,6 +99,33 @@ export function SourceNovelDetailView() {
     processingStore.cancelProcessing();
   };
 
+  const handleReanalyze = async () => {
+    if (!novel || isAnyProcessing) return;
+
+    const confirmed = confirm('重新分析将覆盖现有分析结果，是否继续？');
+    if (!confirmed) return;
+
+    // 加载原始文本（如果尚未加载）
+    let text = rawText;
+    if (!text) {
+      const res = await fetch(`/api/library/get?id=${novel.id}`);
+      const data = await res.json();
+      text = data.rawText ?? null;
+    }
+
+    if (!text) {
+      toast.error('无法加载原始文本，请重新上传小说');
+      return;
+    }
+
+    processingStore.startProcessing(novel.id, text, {
+      apiKey: getEffectiveApiKey(),
+      model,
+      baseURL,
+      maxContextTokens,
+    });
+  };
+
   const isReady = novel.status === 'ready';
   const isRaw = novel.status === 'raw';
   const hasAnyResult = !!(novel.styleProfile || novel.plotReport || novel.characterDynamics || novel.readerExperience || novel.narrativeConstraints || novel.novelDna);
@@ -142,6 +170,16 @@ export function SourceNovelDetailView() {
         </div>
 
         {/* 操作按钮 */}
+        {isReady && (
+          <button
+            onClick={handleReanalyze}
+            disabled={isAnyProcessing}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <RotateCcw className="w-4 h-4" />
+            重新分析
+          </button>
+        )}
         {!isReady && (
           <div className="flex items-center gap-2">
             {isThisProcessing ? (

@@ -4,7 +4,7 @@
 
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { ArrowLeft, Play, Loader2 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store/project';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
@@ -15,7 +15,7 @@ import { parseReviewOutput, isReviewPassed } from '@/lib/generation/chapter-revi
 import { StreamingText } from '@/components/StreamingText';
 import { ReviewPanel } from './ReviewPanel';
 import { FeedbackInput } from './FeedbackInput';
-import type { GeneratedChapter, ChapterReview, ChapterPlan } from '@/types';
+import type { GeneratedChapter, ChapterPlan } from '@/types';
 import { nanoid } from 'nanoid';
 
 export function ChapterGenerationView({ embedded = false }: { embedded?: boolean }) {
@@ -23,8 +23,13 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
   const { sourceNovels } = useSourceLibraryStore();
   const { getEffectiveApiKey, model, baseURL } = useSettingsStore();
 
-  const project = projects.find((p) => p.id === activeProjectId);
-  const projectSources = sourceNovels.filter((s) => project?.sourceNovelIds.includes(s.id));
+  // 用 useMemo 稳定派生值，避免 useCallback 依赖在每次渲染时变化
+  const project = useMemo(() => projects.find((p) => p.id === activeProjectId), [projects, activeProjectId]);
+  const projectSources = useMemo(
+    () => sourceNovels.filter((s) => project?.sourceNovelIds.includes(s.id)),
+    [sourceNovels, project],
+  );
+  const chapterPlans = useMemo(() => project?.chapterPlans ?? [], [project]);
 
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [currentChapter, setCurrentChapter] = useState<GeneratedChapter | null>(null);
@@ -33,8 +38,10 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
   const reviewStream = useStreamingFetch();
   const reviseStream = useStreamingFetch();
 
-  const chapterPlans = project?.chapterPlans ?? [];
-  const selectedPlan = chapterPlans.find((p) => p.id === selectedPlanId);
+  const selectedPlan = useMemo(
+    () => chapterPlans.find((p) => p.id === selectedPlanId) ?? null,
+    [chapterPlans, selectedPlanId],
+  );
 
   // 生成章节正文
   const handleGenerate = useCallback(async (plan: ChapterPlan) => {
@@ -72,9 +79,9 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
   // 自动审查
   const handleReview = useCallback(async () => {
     if (!currentChapter || !project) return;
+    const chapterId = currentChapter.id;
 
     const ai = { apiKey: getEffectiveApiKey(), model, baseURL };
-    const plan = chapterPlans.find((p) => p.id === currentChapter.chapterPlanId);
     const ctx = assembleLayerContext(5, projectSources, project, currentChapter.chapterPlanId);
 
     const result = await reviewStream.startFetch('/api/chapter/review', {
@@ -94,16 +101,16 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
         reviewStatus: passed ? 'approved' as const : 'needs_revision' as const,
       };
       setCurrentChapter((prev) => prev ? { ...prev, ...updated } : null);
-      if (project) updateGeneratedChapter(project.id, currentChapter.id, updated);
+      if (project) updateGeneratedChapter(project.id, chapterId, updated);
     }
-  }, [currentChapter, project, projectSources, chapterPlans, getEffectiveApiKey, model, baseURL, reviewStream, updateGeneratedChapter]);
+  }, [currentChapter, project, projectSources, getEffectiveApiKey, model, baseURL, reviewStream, updateGeneratedChapter]);
 
   // 修正
   const handleRevise = useCallback(async (feedback?: string) => {
     if (!currentChapter || !project || currentChapter.revisionCount >= 3) return;
+    const chapterId = currentChapter.id;
 
     const ai = { apiKey: getEffectiveApiKey(), model, baseURL };
-    const plan = chapterPlans.find((p) => p.id === currentChapter.chapterPlanId);
     const ctx = assembleLayerContext(5, projectSources, project, currentChapter.chapterPlanId);
     const reviewsText = currentChapter.reviews.map((r) =>
       `${r.dimension}: ${r.score}/10 - ${r.issues.join(', ')}`
@@ -128,9 +135,9 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
         humanFeedback: feedback ?? null,
       };
       setCurrentChapter((prev) => prev ? { ...prev, ...updated } : null);
-      updateGeneratedChapter(project.id, currentChapter.id, updated);
+      updateGeneratedChapter(project.id, chapterId, updated);
     }
-  }, [currentChapter, project, projectSources, chapterPlans, getEffectiveApiKey, model, baseURL, reviseStream, updateGeneratedChapter]);
+  }, [currentChapter, project, projectSources, getEffectiveApiKey, model, baseURL, reviseStream, updateGeneratedChapter]);
 
   if (!project) {
     return (

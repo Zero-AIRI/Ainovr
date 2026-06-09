@@ -6,18 +6,16 @@ import type {
   BookOutline,
   ChapterPlan,
   ChapterSet,
-  GenerationLayer,
   Phase,
   SourceNovel,
   Volume,
   WritingProject,
 } from '@/types';
-import { assembleLayerContext, type LayerContext } from './context-assembler';
+import { assembleLayerContext } from './context-assembler';
+import { useSettingsStore } from '@/lib/store/settings';
 
 /** 获取 AI 设置 */
 function getAISettings() {
-  // 从 settings store 获取（延迟导入避免循环依赖）
-  const { useSettingsStore } = require('@/lib/store');
   const s = useSettingsStore.getState();
   return {
     apiKey: s.getEffectiveApiKey(),
@@ -52,15 +50,6 @@ async function streamGenerate(url: string, body: object): Promise<string | null>
   }
 
   return fullText;
-}
-
-/** 保存项目到服务端 */
-async function saveProject(project: WritingProject) {
-  await fetch('/api/project/save', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(project),
-  });
 }
 
 // ============================================

@@ -4,7 +4,7 @@
 
 import { getPrompt } from './helpers';
 
-const DEFAULT_SYSTEM_PROMPT = `你是小说实体分类器。你会收到一批候选实体名称，以及小说标题作为上下文。
+export const DEFAULT_SYSTEM_PROMPT = `你是小说实体分类器。你会收到一批候选实体名称，以及小说标题作为上下文。
 
 你的任务：对每个实体判断其类型。
 

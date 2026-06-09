@@ -40,8 +40,6 @@ function createStreamFetcher() {
     },
 
     async fetch(url: string, body: object): Promise<{ result: string | null; state: StreamState }> {
-      this.abort();
-
       const controller = new AbortController();
       abortController = controller;
 
@@ -335,7 +333,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
         const profilePromise = runMultiBatch(
           slices, styleBatchInfo,
           '/api/source/process/style',
-          () => getStyleExtractionRequestBody(slices, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL, aiConfig.maxContextTokens),
+          () => getStyleExtractionRequestBody(slices, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
           (chunk, prev) => getStyleSupplementRequestBody(chunk, prev, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
           1,
         );
@@ -414,7 +412,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
         get()._setProgress(Math.round(4 * 100 / TOTAL_STEPS));
         await saveStep(3, { characterDynamics });
 
-        // ── Step 4 + Step 5: 读者体验 ‖ 叙事约束（可并行） ──
+        // ── Step 4 + Step 5: 读者体验 → 叙事约束（串行） ──
         updateNovel({ status: 'deep_analyzing' });
 
         // Step 4: 读者体验
@@ -422,29 +420,13 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
         startProgressSimulation(4);
 
         const readerExpBatchInfo = computeReaderExperienceBatches(slices, aiConfig.maxContextTokens);
-        const readerExpPromise = runMultiBatch(
+        const readerExperience = await runMultiBatch(
           slices, readerExpBatchInfo,
           '/api/source/process/reader-experience',
           () => getReaderExperienceExtractionRequestBody(slices, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
           (chunk, prev) => getReaderExperienceSupplementRequestBody(chunk, prev, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
           4,
         );
-
-        // Step 5: 叙事约束（不依赖 Step 4，可并行）
-        set({ currentStep: 5 });
-        startProgressSimulation(5);
-
-        const narConBatchInfo = computeNarrativeConstraintsBatches(slices, aiConfig.maxContextTokens);
-        const narConPromise = runMultiBatch(
-          slices, narConBatchInfo,
-          '/api/source/process/narrative-constraints',
-          () => getNarrativeConstraintsExtractionRequestBody(slices, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
-          (chunk, prev) => getNarrativeConstraintsSupplementRequestBody(chunk, prev, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
-          5,
-        );
-
-        // 等待两者都完成
-        const [readerExperience, narrativeConstraints] = await Promise.all([readerExpPromise, narConPromise]);
 
         stopProgressSimulation();
 
@@ -453,16 +435,36 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
           reportError(4, errMsg);
           return;
         }
+
+        updateNovel({ readerExperience });
+        set((s) => ({ completedSteps: [...s.completedSteps, 4] }));
+        get()._setProgress(Math.round(5 * 100 / TOTAL_STEPS));
+        await saveStep(4, { readerExperience });
+
+        // Step 5: 叙事约束（串行执行）
+        set({ currentStep: 5 });
+        startProgressSimulation(5);
+
+        const narConBatchInfo = computeNarrativeConstraintsBatches(slices, aiConfig.maxContextTokens);
+        const narrativeConstraints = await runMultiBatch(
+          slices, narConBatchInfo,
+          '/api/source/process/narrative-constraints',
+          () => getNarrativeConstraintsExtractionRequestBody(slices, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          (chunk, prev) => getNarrativeConstraintsSupplementRequestBody(chunk, prev, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+          5,
+        );
+
+        stopProgressSimulation();
+
         if (!narrativeConstraints) {
           const errMsg = get().streamErrors[5] || '叙事约束分析失败，请检查 API 配置';
           reportError(5, errMsg);
           return;
         }
 
-        updateNovel({ readerExperience, narrativeConstraints });
-        set((s) => ({ completedSteps: [...s.completedSteps, 4, 5] }));
+        updateNovel({ narrativeConstraints });
+        set((s) => ({ completedSteps: [...s.completedSteps, 5] }));
         get()._setProgress(Math.round(6 * 100 / TOTAL_STEPS));
-        await saveStep(4, { readerExperience });
         await saveStep(5, { narrativeConstraints });
 
         // ── Step 6: 样本选取 ──

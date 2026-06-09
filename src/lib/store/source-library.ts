@@ -26,7 +26,7 @@ export interface SourceLibraryState {
   setActiveTask: (task: PipelineTask | null) => void;
 }
 
-export const useSourceLibraryStore = create<SourceLibraryState>()((set, get) => ({
+export const useSourceLibraryStore = create<SourceLibraryState>()((set) => ({
   sourceNovels: [],
   activeSourceId: null,
   activeTask: null,

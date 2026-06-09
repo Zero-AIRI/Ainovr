@@ -3,7 +3,7 @@
 // 90% 程序 + 10% AI（仅最后分类用）
 // ============================================
 
-import type { EntityIndex, EntityEntry } from '@/types';
+import type { EntityIndex } from '@/types';
 
 // ---- 中文停用词表（核心子集） ----
 const STOP_WORDS = new Set([
@@ -260,21 +260,15 @@ export function splitEntityIndex(index: EntityIndex): {
   locationIndex: EntityIndex;
   organizationIndex: EntityIndex;
   artifactIndex: EntityIndex;
+  conceptIndex: EntityIndex;
 } {
   const characterIndex: EntityIndex = {};
   const locationIndex: EntityIndex = {};
   const organizationIndex: EntityIndex = {};
   const artifactIndex: EntityIndex = {};
+  const conceptIndex: EntityIndex = {};
 
   for (const [name, entry] of Object.entries(index)) {
-    const sub: Record<string, EntityEntry> = {
-      character: characterIndex,
-      location: locationIndex,
-      organization: organizationIndex,
-      artifact: artifactIndex,
-    }[entry.type] || {};
-
-    // 重新归类
     switch (entry.type) {
       case 'character':
         characterIndex[name] = entry;
@@ -288,11 +282,13 @@ export function splitEntityIndex(index: EntityIndex): {
       case 'artifact':
         artifactIndex[name] = entry;
         break;
-      // 'concept' 类型不放入子索引
+      case 'concept':
+        conceptIndex[name] = entry;
+        break;
     }
   }
 
-  return { characterIndex, locationIndex, organizationIndex, artifactIndex };
+  return { characterIndex, locationIndex, organizationIndex, artifactIndex, conceptIndex };
 }
 
 /**

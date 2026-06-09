@@ -4,7 +4,7 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSettingsStore } from '@/lib/store/settings';
 import {
   Dialog,
@@ -36,14 +36,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [baseURL, setBaseURL] = useState('');
   const [maxContextTokens, setMaxContextTokens] = useState(1000000);
 
-  // 弹窗打开时从 store 同步
-  useEffect(() => {
-    if (!open) return;
-    setApiKey(storeApiKey);
-    setModel(storeModel);
-    setBaseURL(storeBaseURL);
-    setMaxContextTokens(storeMaxContextTokens);
-  }, [open, storeApiKey, storeModel, storeBaseURL, storeMaxContextTokens]);
+  // 弹窗打开时从 store 同步到本地编辑状态
+  function handleOpenChange(isOpen: boolean) {
+    if (isOpen) {
+      setApiKey(storeApiKey);
+      setModel(storeModel);
+      setBaseURL(storeBaseURL);
+      setMaxContextTokens(storeMaxContextTokens);
+    }
+    onOpenChange(isOpen);
+  }
 
   const handleSave = () => {
     setAISettings({
@@ -52,11 +54,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       baseURL: baseURL.trim() || DEFAULT_BASE_URL,
       maxContextTokens: maxContextTokens > 0 ? maxContextTokens : 1000000,
     });
-    onOpenChange(false);
+    handleOpenChange(false);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>API 设置</DialogTitle>
@@ -110,7 +112,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" size="sm" onClick={() => handleOpenChange(false)}>
             取消
           </Button>
           <Button size="sm" onClick={handleSave}>

@@ -16,7 +16,7 @@ import { getStyleExtractionRequestBody, computeStyleBatches, getStyleSupplementR
 import { getPlotExtractionRequestBody, computePlotBatches, getPlotSupplementRequestBody } from '@/lib/source-processing/plot-extractor';
 import { getSampleSelectionRequestBody, parseSampleOutput } from '@/lib/source-processing/sample-selector';
 import { StreamingText } from '@/components/StreamingText';
-import type { SourceNovel, SemanticSlice } from '@/types';
+import type { SemanticSlice } from '@/types';
 
 const STEPS = [
   { key: 'slice', label: '智能切片' },
@@ -108,7 +108,7 @@ export function SourceProcessView() {
 
     if (!batchInfo.needsBatch) {
       // 单批
-      const body = getStyleExtractionRequestBody(slices, ai.apiKey, ai.model, ai.baseURL, ai.maxContextTokens);
+      const body = getStyleExtractionRequestBody(slices, ai.apiKey, ai.model, ai.baseURL);
       const result = await styleStream.startFetch('/api/source/process/style', body);
       if (result) {
         profile = result;
@@ -117,7 +117,7 @@ export function SourceProcessView() {
       // 多批
       for (let i = 0; i < batchInfo.batches.length; i++) {
         const body = i === 0
-          ? getStyleExtractionRequestBody(slices, ai.apiKey, ai.model, ai.baseURL, ai.maxContextTokens)
+          ? getStyleExtractionRequestBody(slices, ai.apiKey, ai.model, ai.baseURL)
           : getStyleSupplementRequestBody(batchInfo.batches[i], profile, ai.apiKey, ai.model, ai.baseURL);
         const result = await styleStream.startFetch('/api/source/process/style', body);
         if (result) profile = result;

@@ -15,7 +15,6 @@ export function getStyleExtractionRequestBody(
   apiKey: string,
   model: string,
   baseURL: string,
-  maxContextTokens: number,
 ) {
   const slicesText = slices.map((s) => `### ${s.title}\n\n${s.content}`).join('\n\n');
   const { systemPrompt, userMessage } = buildStyleExtractionMessages(slicesText);

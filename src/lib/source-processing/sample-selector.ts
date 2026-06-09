@@ -15,7 +15,6 @@ export function parseSampleOutput(raw: string): RepresentativeSample[] {
     const headerLine = lines[0] ?? '';
     const titleMatch = headerLine.match(/^\d+:\s*(.+)/);
 
-    let sliceIndex = 0;
     let selectionReason = '';
     let contentStartIndex = 0;
 

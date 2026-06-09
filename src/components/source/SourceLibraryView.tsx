@@ -1,27 +1,25 @@
 // ============================================
-// 素材库视图 — 双标签页（小说管理 | 文风/情节库）
+// 素材库视图 — 小说管理 + 上传
 // ============================================
 
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { Upload, Trash2 } from 'lucide-react';
+import { Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import { parseTxtFile, formatCharCount } from '@/lib/file-parser';
+import { parseTxtFile } from '@/lib/file-parser';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { useProjectStore } from '@/lib/store/project';
 import { SourceNovelCard } from './SourceNovelCard';
-import { StylePlotLibraryView } from './StylePlotLibraryView';
 import type { SourceNovel } from '@/types';
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 export function SourceLibraryView() {
-  const { sourceNovels, loadSourceNovels, addSourceNovel, updateSourceNovel, setActiveSourceId } = useSourceLibraryStore();
+  const { sourceNovels, loadSourceNovels, addSourceNovel, setActiveSourceId } = useSourceLibraryStore();
   const setActiveView = useProjectStore((s) => s.setActiveView);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'novels' | 'library'>('novels');
 
   useEffect(() => {
     loadSourceNovels();
@@ -98,7 +96,7 @@ export function SourceLibraryView() {
       });
       useSourceLibraryStore.getState().removeSourceNovel(id);
       toast.success('已删除');
-    } catch (err) {
+    } catch {
       toast.error('删除失败');
     }
   }, []);
@@ -116,7 +114,7 @@ export function SourceLibraryView() {
       } else {
         toast.error('重命名失败');
       }
-    } catch (err) {
+    } catch {
       toast.error('重命名失败');
     }
   }, []);
@@ -155,61 +153,26 @@ export function SourceLibraryView() {
         </label>
       </div>
 
-      {/* 标签页 */}
-      <div className="flex gap-1 mb-4 border-b border-border">
-        <button
-          onClick={() => setActiveTab('novels')}
-          className={`
-            px-4 py-2 text-sm font-medium transition-colors relative
-            ${activeTab === 'novels' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}
-          `}
-        >
-          小说管理
-          {activeTab === 'novels' && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab('library')}
-          className={`
-            px-4 py-2 text-sm font-medium transition-colors relative
-            ${activeTab === 'library' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}
-          `}
-        >
-          文风/情节库
-          {activeTab === 'library' && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
-          )}
-        </button>
-      </div>
-
-      {/* 标签页内容 */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === 'novels' && (
-          <div className="h-full overflow-y-auto">
-            {sourceNovels.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-                <Upload className="w-10 h-10 mb-3 opacity-30" />
-                <p className="text-sm">拖拽或点击上传 .txt 小说文件</p>
-                <p className="text-xs mt-1 opacity-60">添加到素材库后可进行文风和情节分析</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {sourceNovels.map((novel) => (
-                  <SourceNovelCard
-                    key={novel.id}
-                    novel={novel}
-                    onClick={() => handleOpenDetail(novel.id)}
-                    onRename={handleRename}
-                    onDelete={handleDelete}
-                  />
-                ))}
-              </div>
-            )}
+      {/* 小说列表 */}
+      <div className="flex-1 overflow-y-auto">
+        {sourceNovels.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+            <Upload className="w-10 h-10 mb-3 opacity-30" />
+            <p className="text-sm">拖拽或点击上传 .txt 小说文件</p>
+            <p className="text-xs mt-1 opacity-60">添加到素材库后可进行分析</p>
           </div>
-        )}
-        {activeTab === 'library' && (
-          <StylePlotLibraryView />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {sourceNovels.map((novel) => (
+              <SourceNovelCard
+                key={novel.id}
+                novel={novel}
+                onClick={() => handleOpenDetail(novel.id)}
+                onRename={handleRename}
+                onDelete={handleDelete}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>

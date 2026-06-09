@@ -8,13 +8,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { Save, RotateCcw, ChevronRight, ChevronDown, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePromptStore, PROMPT_REGISTRY } from '@/lib/store/prompts';
-import type { PromptMeta } from '@/lib/store/prompts';
 
 /** 按分类分组 */
 const CATEGORIES = ['素材处理', '层级生成', '章节写作'];
 
 export function PromptManagementView() {
-  const { loadPrompts, getPrompt, defaultPrompts, customPrompts, saveCustomPrompt, resetPrompt, loaded } = usePromptStore();
+  const { loadPrompts, defaultPrompts, customPrompts, saveCustomPrompt, loaded } = usePromptStore();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(CATEGORIES));
@@ -24,7 +23,6 @@ export function PromptManagementView() {
     if (!loaded) loadPrompts();
   }, [loaded, loadPrompts]);
 
-  const currentContent = selectedKey ? getPrompt(selectedKey) : '';
   const isCustom = selectedKey ? !!customPrompts[selectedKey] : false;
 
   // 选择提示词
@@ -60,10 +58,10 @@ export function PromptManagementView() {
   }, [selectedKey, defaultPrompts, saveCustomPrompt]);
 
   // 内容修改
-  const handleEdit = useCallback((value: string) => {
+  function handleEdit(value: string) {
     setEditContent(value);
     setHasChanges(true);
-  }, []);
+  }
 
   const toggleCategory = (cat: string) => {
     setExpandedCategories((prev) => {
