@@ -166,7 +166,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
           onProgress: (progress) => {
             set({ daoProgress: progress });
           },
-        });
+        }, streamFetcher);
 
         // 保存结果
         const updates: Record<string, unknown> = {};
@@ -179,13 +179,18 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
         libraryStore.updateSourceNovel(novelId, updates);
 
         try {
-          await fetch('/api/library/save-step', {
+          const res = await fetch('/api/library/save-step', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: novelId, step: 8, data: updates }),
           });
+          if (!res.ok) {
+            console.error('保存道/气分析结果失败:', res.status);
+            set({ daoError: `保存失败: HTTP ${res.status}` });
+          }
         } catch (err) {
           console.error('保存道/气分析结果失败:', err);
+          set({ daoError: `保存失败: ${err instanceof Error ? err.message : '网络错误'}` });
         }
 
         set({ isRunningDao: false, daoProgress: 100, daoCurrentStep: '完成' });
@@ -285,13 +290,19 @@ function runPipelineInternal(
     },
     onSaveStep: async (step, data) => {
       try {
-        await fetch('/api/library/save-step', {
+        const res = await fetch('/api/library/save-step', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: novelId, step, data }),
         });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          console.error(`保存步骤 ${step} 失败:`, err);
+          get()._updateStreamError(step, `保存失败: ${err.error || res.status}`);
+        }
       } catch (err) {
         console.error(`保存步骤 ${step} 失败:`, err);
+        get()._updateStreamError(step, `保存失败: ${err instanceof Error ? err.message : '网络错误'}`);
       }
     },
     onUpdateNovel: (updates) => {
@@ -301,7 +312,7 @@ function runPipelineInternal(
 
   (async () => {
     try {
-      await runBasicPipeline(novelId, rawText, aiConfig, novel, callbacks);
+      await runBasicPipeline(novelId, rawText, aiConfig, novel, callbacks, streamFetcher);
       set({ isRunningAll: false, currentStep: -1, progress: 100, processingNovelId: null });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '处理管线异常';

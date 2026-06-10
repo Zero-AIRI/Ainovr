@@ -54,6 +54,7 @@ export async function runDaoPipeline(
   novel: SourceNovel,
   aiConfig: AIConfig,
   callbacks: DaoPipelineCallbacks,
+  externalFetcher?: ReturnType<typeof createStreamFetcher>,
 ): Promise<{
   experienceCurve: ExperienceCurve[];
   ablationResults: AblationResult[];
@@ -61,7 +62,7 @@ export async function runDaoPipeline(
   novelDnaV2: NovelDNA | null;
   techniqueSamples: TechniqueSampleLibrary | null;
 }> {
-  const fetcher = createStreamFetcher();
+  const fetcher = externalFetcher ?? createStreamFetcher();
   const slices = novel.slices;
   const styleProfile = novel.styleProfile ?? '';
   const plotReport = novel.plotReport ?? '';
@@ -111,7 +112,7 @@ export async function runDaoPipeline(
   }
 
   if (allAnnotations.length === 0) {
-    callbacks.onStepError('experience', '所有读者 persona 标注均失败');
+    throw new Error('所有读者 persona 标注均失败，请检查 API 配置或重试');
   }
 
   const experienceCurve = aggregateExperienceCurves(allAnnotations, slices);

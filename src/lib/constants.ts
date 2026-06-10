@@ -9,4 +9,4 @@ export const DEFAULT_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 
 /** 允许的 API 协议（防止 SSRF） */
-export const ALLOWED_API_PROTOCOLS = ['https:', 'http:'] as const;
+export const ALLOWED_API_PROTOCOLS = ['https:'] as const;

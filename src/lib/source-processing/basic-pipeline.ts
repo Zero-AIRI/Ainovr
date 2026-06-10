@@ -109,7 +109,10 @@ async function runMultiBatch(
     }
   }
 
-  callbacks.onStreamError(streamStep, null);
+  // 仅在成功时清除错误；失败时保留上游设置的 error 状态
+  if (result) {
+    callbacks.onStreamError(streamStep, null);
+  }
   return result;
 }
 
@@ -392,8 +395,9 @@ export async function runBasicPipeline(
   aiConfig: AIConfig,
   novel: SourceNovel | null,
   callbacks: BasicPipelineCallbacks,
+  externalFetcher?: ReturnType<typeof createStreamFetcher>,
 ): Promise<BasicPipelineResult> {
-  const fetcher = createStreamFetcher();
+  const fetcher = externalFetcher ?? createStreamFetcher();
   const resumeStep = determineResumeStep(novel);
   const skippedSteps: number[] = [];
 
@@ -455,8 +459,7 @@ export async function runBasicPipeline(
     readerExperience = results[0];
     narrativeConstraints = results[1];
 
-    callbacks.onSaveStep(4, { readerExperience });
-    callbacks.onSaveStep(5, { narrativeConstraints });
+    // onSaveStep 已在 runStep4/runStep5 内部调用，此处无需重复
     callbacks.onStepComplete(4);
     callbacks.onStepComplete(5);
   } else if (resumeStep <= 5) {

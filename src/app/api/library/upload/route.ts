@@ -9,8 +9,16 @@ import { safeJoin } from '@/lib/safe-path';
 
 const LIBRARY_DIR = path.join(process.cwd(), 'data', 'source_library');
 
+/** 最大请求体大小：50MB（防止 OOM） */
+const MAX_BODY_SIZE = 50 * 1024 * 1024;
+
 export async function POST(req: NextRequest) {
   try {
+    // 检查 Content-Length 防止 OOM
+    const contentLength = parseInt(req.headers.get('content-length') || '0', 10);
+    if (contentLength > MAX_BODY_SIZE) {
+      return NextResponse.json({ error: '文件过大，最大支持 50MB' }, { status: 413 });
+    }
     const { id, title, rawText, totalChars, importConfig } = await req.json();
 
     if (!id || !title || typeof rawText !== 'string') {

@@ -3,9 +3,9 @@
 // ============================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import path from 'path';
 import { safeJoin } from '@/lib/safe-path';
+import { atomicWriteJson, atomicWriteText } from '@/lib/atomic-write';
 import type { SourceNovel } from '@/types';
 
 const LIBRARY_DIR = path.join(process.cwd(), 'data', 'source_library');
@@ -19,7 +19,8 @@ export async function POST(req: NextRequest) {
     }
 
     const novelDir = safeJoin(LIBRARY_DIR, sourceNovel.id);
-    await fs.mkdir(novelDir, { recursive: true });
+    const { mkdir } = await import('fs/promises');
+    await mkdir(novelDir, { recursive: true });
 
     // meta.json（不含大体积字段）
     const meta = {
@@ -39,82 +40,46 @@ export async function POST(req: NextRequest) {
       hasNovelDna: !!sourceNovel.novelDna,
       sampleCount: sourceNovel.representativeSamples?.length ?? 0,
     };
-    await fs.writeFile(
-      path.join(novelDir, 'meta.json'),
-      JSON.stringify(meta, null, 2),
-      'utf-8',
-    );
+    await atomicWriteJson(path.join(novelDir, 'meta.json'), meta);
 
     // slices.json
     if (sourceNovel.slices) {
-      await fs.writeFile(
-        path.join(novelDir, 'slices.json'),
-        JSON.stringify(sourceNovel.slices, null, 2),
-        'utf-8',
-      );
+      await atomicWriteJson(path.join(novelDir, 'slices.json'), sourceNovel.slices);
     }
 
     // style_profile.md
     if (sourceNovel.styleProfile) {
-      await fs.writeFile(
-        path.join(novelDir, 'style_profile.md'),
-        sourceNovel.styleProfile,
-        'utf-8',
-      );
+      await atomicWriteText(path.join(novelDir, 'style_profile.md'), sourceNovel.styleProfile);
     }
 
     // plot_report.md
     if (sourceNovel.plotReport) {
-      await fs.writeFile(
-        path.join(novelDir, 'plot_report.md'),
-        sourceNovel.plotReport,
-        'utf-8',
-      );
+      await atomicWriteText(path.join(novelDir, 'plot_report.md'), sourceNovel.plotReport);
     }
 
     // character_dynamics.md
     if (sourceNovel.characterDynamics) {
-      await fs.writeFile(
-        path.join(novelDir, 'character_dynamics.md'),
-        sourceNovel.characterDynamics,
-        'utf-8',
-      );
+      await atomicWriteText(path.join(novelDir, 'character_dynamics.md'), sourceNovel.characterDynamics);
     }
 
     // reader_experience.md
     if (sourceNovel.readerExperience) {
-      await fs.writeFile(
-        path.join(novelDir, 'reader_experience.md'),
-        sourceNovel.readerExperience,
-        'utf-8',
-      );
+      await atomicWriteText(path.join(novelDir, 'reader_experience.md'), sourceNovel.readerExperience);
     }
 
     // narrative_constraints.md
     if (sourceNovel.narrativeConstraints) {
-      await fs.writeFile(
-        path.join(novelDir, 'narrative_constraints.md'),
-        sourceNovel.narrativeConstraints,
-        'utf-8',
-      );
+      await atomicWriteText(path.join(novelDir, 'narrative_constraints.md'), sourceNovel.narrativeConstraints);
     }
 
     // novel_dna.yaml
     if (sourceNovel.novelDna) {
-      await fs.writeFile(
-        path.join(novelDir, 'novel_dna.yaml'),
-        sourceNovel.novelDna,
-        'utf-8',
-      );
+      await atomicWriteText(path.join(novelDir, 'novel_dna.yaml'), sourceNovel.novelDna);
     }
 
     // samples.json
     if (sourceNovel.representativeSamples) {
-      await fs.writeFile(
-        path.join(novelDir, 'samples.json'),
-        JSON.stringify(sourceNovel.representativeSamples, null, 2),
-        'utf-8',
-      );
+      await atomicWriteJson(path.join(novelDir, 'samples.json'), sourceNovel.representativeSamples);
     }
 
     return NextResponse.json({ success: true, id: sourceNovel.id });
