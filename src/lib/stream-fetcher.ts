@@ -62,6 +62,10 @@ export function createStreamFetcher() {
 
         const fullText = chunks.join('');
         if (!fullText.trim()) throw new Error('模型返回了空响应');
+        // 检测上游编码的错误（providers.ts 用文本而非 controller.error 传递）
+        if (fullText.startsWith('[STREAM_ERROR]')) {
+          throw new Error(fullText.replace(/^\[STREAM_ERROR\]\s*/, ''));
+        }
         state.isStreaming = false;
         return { result: fullText, state };
       } catch (err: unknown) {

@@ -77,13 +77,16 @@ export function chatCompletionStream(options: ModelOptions, params: ChatParams):
 
         if (!response.ok) {
           const errText = await response.text().catch(() => 'Unknown error');
-          controller.error(new Error(`API 调用失败 (${response.status}): ${errText}`));
+          // 用文本编码错误（controller.error 不跨 HTTP 传播）
+          controller.enqueue(encoder.encode(`[STREAM_ERROR] API 调用失败 (${response.status}): ${errText}`));
+          controller.close();
           return;
         }
 
         const reader = response.body?.getReader();
         if (!reader) {
-          controller.error(new Error('无法读取响应流'));
+          controller.enqueue(encoder.encode('[STREAM_ERROR] 无法读取响应流'));
+          controller.close();
           return;
         }
 
@@ -115,7 +118,10 @@ export function chatCompletionStream(options: ModelOptions, params: ChatParams):
         }
         controller.close();
       } catch (err) {
-        controller.error(err);
+        // 用文本编码错误（controller.error 不跨 HTTP 传播）
+        const msg = err instanceof Error ? err.message : '未知错误';
+        controller.enqueue(encoder.encode(`[STREAM_ERROR] ${msg}`));
+        controller.close();
       }
     },
   });

@@ -364,8 +364,11 @@ async function runStep7(
   let novelDna: string | null = null;
 
   if (!dnaResult.result) {
-    // DNA 压缩失败不影响整体流程
-    console.warn('DNA 压缩失败:', dnaResult.state.error);
+    // DNA 压缩失败不影响整体流程，但通知用户
+    const dnaError = dnaResult.state.error || '未知错误';
+    console.warn('DNA 压缩失败:', dnaError);
+    callbacks.onStreamUpdate(7, `⚠️ DNA 压缩失败: ${dnaError}`);
+    callbacks.onStreamError(7, dnaError);
   } else {
     callbacks.onStreamUpdate(7, dnaResult.state.content);
     novelDna = dnaResult.result;
