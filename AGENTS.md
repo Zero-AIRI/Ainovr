@@ -1,5 +1,2 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+当需要设计管线分析时 必须能指导模型生成 不做为了分析而分析的事 同时分析小说时 允许模型回答 我不知道 或暂未分析出来 不要强行思考 牵强附会
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
