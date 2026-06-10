@@ -9,9 +9,9 @@ import { buildOutlineGenerationMessages } from '@/lib/ai/prompts';
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { styleGuide, plotGuide, userConcept, apiKey, model, baseURL } = body;
+    const { styleGuide, plotGuide, userConcept, daoContext, rhythmPrescription, apiKey, model, baseURL } = body;
     if (!apiKey) return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
-    const { systemPrompt, userMessage } = buildOutlineGenerationMessages(styleGuide, plotGuide, userConcept);
+    const { systemPrompt, userMessage } = buildOutlineGenerationMessages(styleGuide, plotGuide, userConcept, daoContext, rhythmPrescription);
     const stream = chatCompletionStream(
       { apiKey, model: model || DEFAULT_MODEL, baseURL: baseURL || DEFAULT_BASE_URL },
       { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: 8192 },

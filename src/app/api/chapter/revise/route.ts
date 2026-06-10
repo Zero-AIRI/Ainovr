@@ -9,7 +9,7 @@ import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { chapterContent, reviews, humanFeedback, styleGuide, chapterTask, apiKey, model, baseURL } = body;
+    const { chapterContent, reviews, humanFeedback, styleGuide, chapterTask, daoContext, apiKey, model, baseURL } = body;
 
     if (!apiKey) {
       return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
@@ -24,6 +24,7 @@ export async function POST(req: Request) {
       humanFeedback ?? null,
       styleGuide ?? '',
       chapterTask ?? '',
+      daoContext,
     );
 
     const stream = chatCompletionStream(

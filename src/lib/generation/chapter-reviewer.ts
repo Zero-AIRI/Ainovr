@@ -51,9 +51,10 @@ export function getReviewRequestBody(
   apiKey: string,
   model: string,
   baseURL: string,
+  daoContext?: string,
 ) {
-  const { systemPrompt, userMessage } = buildChapterReviewMessages(chapterContent, styleGuide, chapterTask);
-  return { systemPrompt, userMessage, apiKey, model, baseURL };
+  const { systemPrompt, userMessage } = buildChapterReviewMessages(chapterContent, styleGuide, chapterTask, daoContext);
+  return { systemPrompt, userMessage, apiKey, model, baseURL, daoContext };
 }
 
 /**
@@ -68,12 +69,13 @@ export function getRevisionRequestBody(
   apiKey: string,
   model: string,
   baseURL: string,
+  daoContext?: string,
 ) {
   const reviewsText = reviews
     .map((r) => `- ${r.dimension}: ${r.score}/10\n  问题: ${r.issues.join('; ') || '无'}\n  建议: ${r.suggestions.join('; ') || '无'}`)
     .join('\n');
-  const { systemPrompt, userMessage } = buildChapterRevisionMessages(chapterContent, reviewsText, humanFeedback, styleGuide, chapterTask);
-  return { systemPrompt, userMessage, apiKey, model, baseURL };
+  const { systemPrompt, userMessage } = buildChapterRevisionMessages(chapterContent, reviewsText, humanFeedback, styleGuide, chapterTask, daoContext);
+  return { systemPrompt, userMessage, apiKey, model, baseURL, daoContext };
 }
 
 /**
