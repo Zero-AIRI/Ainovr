@@ -339,6 +339,54 @@ export interface NovelDNA {
   };
 }
 
+// ========================================
+// 事件图谱系统（200万字长篇分析核心）
+// ========================================
+
+/** 结构化小说事件 */
+export interface NovelEvent {
+  id: string;                    // E0001
+  chapter: number;               // 所在章节
+  chunkIndex: number;            // 所在 Chunk
+  type: string;                  // 事件类型：拜师/战斗/揭露/死亡/交易/突破/...
+  participants: string[];        // 参与角色
+  location: string;              // 发生地点
+  description: string;           // 一句话描述（≤50字）
+  causes: string[];              // 前置事件 ID 列表
+  effects: string[];             // 后置事件 ID 列表
+  tensionChange: number;         // 紧张度变化 -5 ~ +5
+  emotion: string;               // 主要情绪
+  foreshadowingOf: string | null;   // 伏笔指向的事件 ID
+  foreshadowingFrom: string | null; // 此事件回收了哪个伏笔
+  confidence: number;            // AI 提取置信度 0-1
+}
+
+/** 事件图谱 */
+export interface EventGraph {
+  novelId: string;
+  events: NovelEvent[];
+  totalChapters: number;
+  totalChunks: number;
+  extractedAt: string;
+  // 索引加速
+  byChapter: Record<number, string[]>;    // chapter → event IDs
+  byParticipant: Record<string, string[]>; // character → event IDs
+  byType: Record<string, string[]>;        // type → event IDs
+  foreshadowingPairs: Array<{ setup: string; payoff: string; distance: number }>;
+}
+
+/** 文本分块（轻量索引） */
+export interface TextChunk {
+  id: string;              // chunk-0001
+  index: number;
+  title: string;           // 章节标题或自动生成
+  content: string;
+  charCount: number;
+  chapterStart: number;
+  chapterEnd: number;
+  entities: string[];      // 程序化提取的实体名
+}
+
 /** 扩展技术样本库（替代 3-5 个样本） */
 export interface TechniqueSampleLibrary {
   hooks: RepresentativeSample[];           // 开头 hook 样本
@@ -381,6 +429,9 @@ export interface SourceNovel {
   ablationResults: AblationResult[] | null;            // 消融测试结果
   tensionAnalysis: TensionAnalysis | null;             // 势能分析
   techniqueSamples: TechniqueSampleLibrary | null;     // 技术样本库（替代代表性样本）
+  // 事件图谱（200万字长篇分析新架构）
+  textChunks: TextChunk[] | null;                      // 文本分块索引
+  eventGraph: EventGraph | null;                       // 事件图谱
 }
 
 // ========================================
@@ -548,6 +599,11 @@ export type PipelineTaskType =
   | 'tension_tracking'
   | 'dna_v2_compression'
   | 'technique_sampling'
+  // 事件图谱
+  | 'text_chunking'
+  | 'event_extraction'
+  | 'event_graph_merge'
+  | 'value_sampling'
   // 五层生成
   | 'outline_generation'
   | 'phase_framework'

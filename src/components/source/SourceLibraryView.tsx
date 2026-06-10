@@ -65,6 +65,8 @@ export function SourceLibraryView() {
           ablationResults: null,
           tensionAnalysis: null,
           techniqueSamples: null,
+          textChunks: null,
+          eventGraph: null,
         };
 
         const res = await fetch('/api/library/upload', {

@@ -67,3 +67,7 @@ export { buildTensionTrackingMessages } from './tension-tracking';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_EXPERIENCE_ANNOTATION } from './experience-annotation';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_ABLATION_TESTING } from './ablation-testing';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_TENSION_TRACKING } from './tension-tracking';
+
+// 事件图谱
+export { buildEventExtractionMessages } from './event-extraction';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_EVENT_EXTRACTION } from './event-extraction';

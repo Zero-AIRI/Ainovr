@@ -35,6 +35,7 @@ import type {
   StyleEngine,
   TechniqueSampleLibrary,
   SourceNovel,
+  EventGraph,
 } from '@/types';
 
 // ---- 流式 fetch 工具 ----
@@ -398,6 +399,132 @@ function inferEmotionalField(tones: string[], curve: ExperienceCurve[]): string 
   if (avgAnticipation < 4 && highImmersion.length > 0) return '持续的沉浸感/舒适感';
 
   return '待确认（请查看体验曲线）';
+}
+
+// ═══════════════════════════════════════════
+// 从事件图谱构建 DNA（200万字长篇分析新路径）
+// ═══════════════════════════════════════════
+
+export function buildNovelDNAFromEventGraph(eventGraph: EventGraph, styleProfile: string, novelId: string, model: string): NovelDNA {
+  const events = eventGraph.events;
+
+  // 道：从事件情绪分布推断
+  const emotionCounts = new Map<string, number>();
+  for (const e of events) {
+    if (e.emotion) emotionCounts.set(e.emotion, (emotionCounts.get(e.emotion) || 0) + 1);
+  }
+  const topEmotion = [...emotionCounts.entries()].sort(([, a], [, b]) => b - a)[0]?.[0] ?? '待确认';
+
+  // 从事件类型分布推断
+  const typeCounts = new Map<string, number>();
+  for (const e of events) typeCounts.set(e.type, (typeCounts.get(e.type) || 0) + 1);
+  const typeEntries = [...typeCounts.entries()].sort(([, a], [, b]) => b - a);
+  const combatRatio = (typeCounts.get('战斗/冲突') || 0) / events.length;
+  const dailyRatio = (typeCounts.get('日常/过渡') || 0) / events.length;
+
+  let primaryEmotionalField = topEmotion;
+  if (dailyRatio > 0.3) primaryEmotionalField = `持续的陪伴感（${topEmotion}底色）`;
+  else if (combatRatio > 0.25) primaryEmotionalField = `持续的紧张感（${topEmotion}底色）`;
+  else primaryEmotionalField = `持续的${topEmotion}感`;
+
+  const dao: NovelDao = {
+    primaryEmotionalField,
+    alternativeReadings: [],
+    whyReadersStay: `读者持续阅读的核心驱动力与「${primaryEmotionalField}」相关。事件图谱中${events.length}个事件的情绪分布支持此推断。`,
+    confidence: events.length > 1000 ? 0.7 : 0.5,
+    userConfirmed: false,
+  };
+
+  // 气：从事件类型比例和因果链推断
+  const maintenanceMethods: string[] = [];
+  if (dailyRatio > 0.2) maintenanceMethods.push(`大量日常/过渡事件（${Math.round(dailyRatio * 100)}%）维持阅读状态`);
+  if (combatRatio > 0.2) maintenanceMethods.push(`高频战斗/冲突事件（${Math.round(combatRatio * 100)}%）维持紧张感`);
+
+  const avgTensionChange = events.reduce((s, e) => s + e.tensionChange, 0) / events.length;
+  if (avgTensionChange > 1) maintenanceMethods.push('整体上升的紧张趋势维持驱动感');
+  else if (avgTensionChange < -1) maintenanceMethods.push('整体下降的紧张趋势维持安全感');
+  else maintenanceMethods.push('均衡的张弛节奏');
+
+  const qi: NovelQi = {
+    maintenanceMethods,
+    breathingCycleDescription: typeEntries.slice(0, 3).map(([t, c]) => `${t}(${c}次)`).join(' → '),
+    rhythmProfile: {
+      propulsionRatio: combatRatio,
+      buildupRatio: (typeCounts.get('决策/选择') || 0) / events.length,
+      releaseRatio: (typeCounts.get('突破/升级') || 0) / events.length,
+      breathRatio: dailyRatio,
+      existenceRatio: dailyRatio * 0.6,
+      calibrationRatio: 0.05,
+    },
+    disruptors: dailyRatio < 0.1 ? ['缺少呼吸段落', '连续高潮'] : ['无明显破坏因素'],
+  };
+
+  // 结构：从因果链推断
+  const highDegreeEvents = events
+    .filter((e) => e.causes.length + e.effects.length >= 5)
+    .sort((a, b) => (b.causes.length + b.effects.length) - (a.causes.length + a.effects.length));
+
+  const structure: NovelStructure = {
+    bones: highDegreeEvents.slice(0, 10).map((e) => ({
+      description: e.description,
+      evidence: [`第${e.chapter}章`, ...e.participants],
+    })),
+    muscles: events
+      .filter((e) => Math.abs(e.tensionChange) >= 2 && e.causes.length + e.effects.length < 5)
+      .slice(0, 15)
+      .map((e) => ({ description: e.description, evidence: [e.type] })),
+    fillerTypeA: events
+      .filter((e) => e.type === '日常/过渡' && Math.abs(e.tensionChange) <= 1)
+      .slice(0, 10)
+      .map((e) => ({ description: e.description, purpose: '维持阅读节奏' })),
+    fillerTypeB: [],
+  };
+
+  // 引擎
+  const engines: NovelEngines = {
+    tensionPatterns: [],
+    characterDecisionModels: [],
+    informationControl: typeEntries.map(([t, c]) => `${t}:${c}`).join(','),
+  };
+
+  // 风险
+  const longForeshadowing = eventGraph.foreshadowingPairs.filter((p) => p.distance > 30);
+  const risks = [
+    ...(longForeshadowing.length > 0 ? [{
+      description: `含${longForeshadowing.length}对超长程伏笔（>30章），直接模仿可能丢失回收`,
+      severity: 'medium' as const,
+      mitigation: '生成时维护伏笔清单，每10章检查回收进度',
+    }] : []),
+    ...(dailyRatio > 0.3 ? [{
+      description: '日常比例过高，可能不适合快节奏平台',
+      severity: 'medium' as const,
+      mitigation: '可压缩日常比例至15-20%',
+    }] : []),
+  ];
+
+  const failureModes: FailureModes = {
+    risks,
+    dependencies: ['长篇连载格式', `${eventGraph.totalChapters}章篇幅`],
+  };
+
+  const styleEngine: StyleEngine = {
+    prosePatterns: [],
+    dialogueStyle: '',
+    descriptionStyle: '',
+    chapterOpenings: [],
+    chapterEndings: [],
+    rawStyleProfile: styleProfile,
+  };
+
+  return {
+    dao,
+    qi,
+    structure,
+    engines,
+    failureModes,
+    styleEngine,
+    meta: { generatedAt: new Date().toISOString(), sourceNovelId: novelId, modelUsed: model, totalSlices: events.length },
+  };
 }
 
 function inferMaintenanceMethods(
