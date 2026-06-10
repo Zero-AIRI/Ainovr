@@ -175,6 +175,182 @@ export interface RepresentativeSample {
   selectionReason: string; // 选取理由（如"典型战斗场景"）
 }
 
+// ========================================
+// Phase 2: 道/气 DNA 系统 — 新类型定义
+// ========================================
+
+// ---- 体验流标注 ----
+
+/** 体验流四维分数（每切片） */
+export interface ExperienceAnnotation {
+  sliceId: string;
+  sliceIndex: number;
+  immersion: number;            // 沉浸感 1-10
+  emotionalIntensity: number;   // 情绪强度 1-10
+  anticipation: number;         // 期待感 1-10
+  perceivedPace: 'fast' | 'medium' | 'slow';
+  confidence: number;           // AI 置信度 0-1
+  readerPersona: string;        // 读者 persona 名称
+  notes: string;                // 自由文本备注
+}
+
+/** 聚合后的体验曲线 */
+export interface ExperienceCurve {
+  sliceId: string;
+  sliceIndex: number;
+  avgImmersion: number;
+  avgEmotionalIntensity: number;
+  avgAnticipation: number;
+  dominantPace: 'fast' | 'medium' | 'slow';
+  scoreSpread: number;           // 多个 persona 的标准差（越大越主观）
+  highPoints: boolean;           // 是否为体验高点（多 persona 共识 >7 分）
+}
+
+// ---- 消融测试 ----
+
+/** 消融测试段落分类 */
+export type AblationCategory =
+  | 'bone'           // 骨架：删掉剧情崩
+  | 'muscle'         // 肌肉：删掉体验下降但剧情不崩
+  | 'filler_a'       // 体验填充：维持气
+  | 'filler_b'       // 机械填充：纯凑字数
+  | 'uncertain';     // 不确定（默认分类）
+
+/** 消融测试结果 */
+export interface AblationResult {
+  sliceId: string;
+  sliceIndex: number;
+  category: AblationCategory;
+  lostIfRemoved: string;        // "删掉会失去什么？"
+  confidence: number;           // 0-1
+  reasoning: string;            // 判定理由
+}
+
+// ---- 势能追踪 ----
+
+/** 势能积累点 */
+export interface TensionAnchor {
+  sliceId: string;
+  sliceIndex: number;
+  chapter: string;
+  type: 'start' | 'reinforcement' | 'release';
+  description: string;          // 发生了什么
+  tensionBefore: number;        // 1-10
+  tensionAfter: number;
+}
+
+/** 完整势能模式 */
+export interface TensionPattern {
+  id: string;
+  climaxType: 'emotional' | 'cognitive' | 'power' | 'identity' | 'relationship';
+  startIndex: number;           // 积累起点 sliceIndex
+  duration: number;             // 积累时长（切片段数）
+  reinforcements: TensionAnchor[];  // 中途强化点
+  release: TensionAnchor;           // 释放点
+  payoffMultiplier: 'low' | 'medium' | 'high' | 'extreme';
+  description: string;
+}
+
+/** 势能分析整体输出 */
+export interface TensionAnalysis {
+  patterns: TensionPattern[];          // 检测到的势能模式
+  breathingCycle: string;              // 呼吸周期描述
+  rhythmProfile: RhythmProfile;        // 节奏画像
+}
+
+/** 节奏画像 */
+export interface RhythmProfile {
+  propulsionRatio: number;    // 推进场景比例 0-1
+  buildupRatio: number;       // 蓄力场景比例
+  releaseRatio: number;       // 释放场景比例
+  breathRatio: number;        // 呼吸场景比例
+  existenceRatio: number;     // 存在场景比例
+  calibrationRatio: number;   // 校准场景比例
+}
+
+// ---- 新 DNA 六层结构 ----
+
+/** 道：核心吸引力 */
+export interface NovelDao {
+  primaryEmotionalField: string;     // 主情绪场
+  alternativeReadings: string[];     // 备选解读
+  whyReadersStay: string;            // 读者为什么愿意一直读
+  confidence: number;                // AI 对该判断的置信度
+  userConfirmed: boolean;            // 用户是否已确认
+}
+
+/** 气：维持阅读状态的手段 */
+export interface NovelQi {
+  maintenanceMethods: string[];      // 维持主情绪场的手法列表
+  breathingCycleDescription: string; // 呼吸周期描述
+  rhythmProfile: RhythmProfile | null;
+  disruptors: string[];             // 会破坏气的因素
+}
+
+/** 骨/肉/填充：消融测试聚合 */
+export interface NovelStructure {
+  bones: Array<{ description: string; evidence: string[] }>;    // 必须存在
+  muscles: Array<{ description: string; evidence: string[] }>;  // 增强体验
+  fillerTypeA: Array<{ description: string; purpose: string }>; // 体验填充
+  fillerTypeB: Array<{ description: string }>;                  // 机械填充
+}
+
+/** 生成引擎 */
+export interface NovelEngines {
+  tensionPatterns: TensionPattern[];   // 势能模式
+  characterDecisionModels: string[];    // 角色决策模型
+  informationControl: string;          // 信息控制方式
+}
+
+/** 迁移风险 */
+export interface FailureModes {
+  risks: Array<{
+    description: string;
+    severity: 'high' | 'medium' | 'low';
+    mitigation: string;
+  }>;
+  dependencies: string[];              // 依赖条件（篇幅/读者群/时代）
+}
+
+/** 技术层（保留原 Step 1 的产出） */
+export interface StyleEngine {
+  prosePatterns: string[];
+  dialogueStyle: string;
+  descriptionStyle: string;
+  chapterOpenings: string[];
+  chapterEndings: string[];
+  rawStyleProfile: string;            // 原始完整文风报告引用
+}
+
+/** 新六层 DNA */
+export interface NovelDNA {
+  dao: NovelDao;
+  qi: NovelQi;
+  structure: NovelStructure;
+  engines: NovelEngines;
+  failureModes: FailureModes;
+  styleEngine: StyleEngine;
+  /** 分析元数据 */
+  meta: {
+    generatedAt: string;
+    sourceNovelId: string;
+    modelUsed: string;
+    totalSlices: number;
+  };
+}
+
+/** 扩展技术样本库（替代 3-5 个样本） */
+export interface TechniqueSampleLibrary {
+  hooks: RepresentativeSample[];           // 开头 hook 样本
+  climaxes: RepresentativeSample[];        // 高潮样本
+  buildups: RepresentativeSample[];        // 蓄力样本
+  transitions: RepresentativeSample[];     // 转场样本
+  relationshipProgressions: RepresentativeSample[]; // 关系推进样本
+  worldRevelations: RepresentativeSample[];  // 世界观揭露样本
+  breathPassages: RepresentativeSample[];    // 呼吸段落样本
+  foreshadowings: RepresentativeSample[];    // 伏笔样本
+}
+
 /** 素材库中的源小说 */
 export interface SourceNovel {
   id: string;
@@ -197,8 +373,14 @@ export interface SourceNovel {
   narrativeConstraints: string | null;                 // Step 4: 叙事约束
   representativeSamples: RepresentativeSample[] | null; // Step 5: 样本
   evolutionModel: string | null;                       // Step 6.5: 演化模型 JSON
-  novelDna: string | null;                             // Step 7: DNA 超压缩 YAML
+  novelDna: string | null;                             // Step 7: DNA 超压缩 YAML（旧版）
   novelGenome: string | null;                          // Step 7: Genome 完整基因库 YAML
+  novelDnaV2: NovelDNA | null;                         // Step 7.5: 新六层 DNA
+  experienceAnnotations: ExperienceAnnotation[] | null;  // 体验流标注
+  experienceCurve: ExperienceCurve[] | null;           // 聚合体验曲线
+  ablationResults: AblationResult[] | null;            // 消融测试结果
+  tensionAnalysis: TensionAnalysis | null;             // 势能分析
+  techniqueSamples: TechniqueSampleLibrary | null;     // 技术样本库（替代代表性样本）
 }
 
 // ========================================
@@ -305,7 +487,8 @@ export type ReviewDimension =
   | 'plot_coherence'       // 情节逻辑
   | 'pacing'               // 节奏
   | 'pattern_execution'    // 小情节模式执行度
-  | 'foreshadow_execution'; // 伏笔/铺垫执行度
+  | 'foreshadow_execution' // 伏笔/铺垫执行度
+  | 'qi_consistency';      // 气的一致性（阅读状态维持）
 
 /** 审查状态 */
 export type ReviewStatus =
@@ -359,6 +542,12 @@ export type PipelineTaskType =
   | 'evolution_modeling'
   | 'dna_compression'
   | 'genome_compression'
+  // 道/气 新管线步骤
+  | 'experience_annotation'
+  | 'ablation_testing'
+  | 'tension_tracking'
+  | 'dna_v2_compression'
+  | 'technique_sampling'
   // 五层生成
   | 'outline_generation'
   | 'phase_framework'

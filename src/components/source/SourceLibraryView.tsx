@@ -59,6 +59,12 @@ export function SourceLibraryView() {
           evolutionModel: null,
           novelDna: null,
           novelGenome: null,
+          novelDnaV2: null,
+          experienceAnnotations: null,
+          experienceCurve: null,
+          ablationResults: null,
+          tensionAnalysis: null,
+          techniqueSamples: null,
         };
 
         const res = await fetch('/api/library/upload', {

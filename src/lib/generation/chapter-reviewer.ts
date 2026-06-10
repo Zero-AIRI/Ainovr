@@ -12,6 +12,7 @@ const VALID_DIMENSIONS: ReadonlySet<string> = new Set([
   'pacing',
   'pattern_execution',
   'foreshadow_execution',
+  'qi_consistency',
 ]);
 
 /** 解析 AI 审查输出为 ChapterReview[] */

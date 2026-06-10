@@ -43,3 +43,9 @@ next-env.d.ts
 # local data
 data/
 novel/
+
+# crash dumps
+*.stackdump
+
+# local claude settings (auto-commit hook etc.)
+.claude/settings.local.json

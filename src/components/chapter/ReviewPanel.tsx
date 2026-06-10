@@ -19,6 +19,7 @@ const DIMENSION_LABELS: Record<ReviewDimension, string> = {
   pacing: '节奏',
   pattern_execution: '模式执行',
   foreshadow_execution: '伏笔执行',
+  qi_consistency: '气的一致性',
 };
 
 export function ReviewPanel({ reviews, onRevise, canRevise, revisionCount }: ReviewPanelProps) {

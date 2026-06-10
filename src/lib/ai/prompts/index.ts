@@ -59,3 +59,11 @@ export { buildChapterRevisionMessages } from './chapter-revision';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_CHAPTER_WRITING } from './chapter-writing';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_CHAPTER_REVIEW } from './chapter-review';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_CHAPTER_REVISION } from './chapter-revision';
+
+// 道/气 新模块
+export { buildExperienceAnnotationMessages, READER_PERSONAS } from './experience-annotation';
+export { buildAblationTestingMessages } from './ablation-testing';
+export { buildTensionTrackingMessages } from './tension-tracking';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_EXPERIENCE_ANNOTATION } from './experience-annotation';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_ABLATION_TESTING } from './ablation-testing';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_TENSION_TRACKING } from './tension-tracking';

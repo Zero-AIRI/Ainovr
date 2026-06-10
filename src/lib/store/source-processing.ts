@@ -12,11 +12,15 @@ import { getReaderExperienceExtractionRequestBody, computeReaderExperienceBatche
 import { getNarrativeConstraintsExtractionRequestBody, computeNarrativeConstraintsBatches, getNarrativeConstraintsSupplementRequestBody } from '@/lib/source-processing/narrative-constraints-extractor';
 import { getSampleSelectionRequestBody, parseSampleOutput } from '@/lib/source-processing/sample-selector';
 import { getDnaCompressionRequestBody } from '@/lib/source-processing/dna-compressor';
+import { runDaoPipeline } from '@/lib/source-processing/dao-pipeline';
 import { useSourceLibraryStore } from './source-library';
-import type { SemanticSlice } from '@/types';
+import { useSettingsStore } from './settings';
+import type { SemanticSlice, ExperienceCurve, AblationResult, TensionAnalysis, NovelDNA, TechniqueSampleLibrary } from '@/types';
 
-/** 总步骤数 */
+/** 总步骤数（基础管线） */
 const TOTAL_STEPS = 8;
+/** 道/气管线步骤数 */
+const DAO_TOTAL_STEPS = 4;
 
 function createFilledArray<T>(length: number, value: T): T[] {
   return Array.from({ length }, () => value);
@@ -131,8 +135,19 @@ export interface SourceProcessingState {
   /** 是否正在运行一键处理 */
   isRunningAll: boolean;
 
+  // ── 道/气管线状态 ──
+  /** 是否正在运行道/气分析 */
+  isRunningDao: boolean;
+  /** 道/气管线进度 0-100 */
+  daoProgress: number;
+  /** 道/气管线当前步骤描述 */
+  daoCurrentStep: string;
+  /** 道/气管线错误 */
+  daoError: string | null;
+
   // Actions
   startProcessing: (novelId: string, rawText: string, aiConfig: AIConfig) => void;
+  startDaoAnalysis: (novelId: string) => void;
   cancelProcessing: () => void;
   resetProcessing: () => void;
 
@@ -156,6 +171,10 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
   errorMessage: null,
   progress: 0,
   isRunningAll: false,
+  isRunningDao: false,
+  daoProgress: 0,
+  daoCurrentStep: '',
+  daoError: null,
 
   _updateStreamContent: (step, content) => {
     set((s) => {
@@ -412,21 +431,31 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
         get()._setProgress(Math.round(4 * 100 / TOTAL_STEPS));
         await saveStep(3, { characterDynamics });
 
-        // ── Step 4 + Step 5: 读者体验 → 叙事约束（串行） ──
+        // ── Step 4 + Step 5: 读者体验 ‖ 叙事约束（并行） ──
         updateNovel({ status: 'deep_analyzing' });
 
-        // Step 4: 读者体验
+        const readerExpBatchInfo = computeReaderExperienceBatches(slices, aiConfig.maxContextTokens);
+        const narConBatchInfo = computeNarrativeConstraintsBatches(slices, aiConfig.maxContextTokens);
+
         set({ currentStep: 4 });
         startProgressSimulation(4);
 
-        const readerExpBatchInfo = computeReaderExperienceBatches(slices, aiConfig.maxContextTokens);
-        const readerExperience = await runMultiBatch(
-          slices, readerExpBatchInfo,
-          '/api/source/process/reader-experience',
-          () => getReaderExperienceExtractionRequestBody(slices, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
-          (chunk, prev) => getReaderExperienceSupplementRequestBody(chunk, prev, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
-          4,
-        );
+        const [readerExperience, narrativeConstraints] = await Promise.all([
+          runMultiBatch(
+            slices, readerExpBatchInfo,
+            '/api/source/process/reader-experience',
+            () => getReaderExperienceExtractionRequestBody(slices, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+            (chunk, prev) => getReaderExperienceSupplementRequestBody(chunk, prev, profile, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+            4,
+          ),
+          runMultiBatch(
+            slices, narConBatchInfo,
+            '/api/source/process/narrative-constraints',
+            () => getNarrativeConstraintsExtractionRequestBody(slices, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+            (chunk, prev) => getNarrativeConstraintsSupplementRequestBody(chunk, prev, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
+            5,
+          ),
+        ]);
 
         stopProgressSimulation();
 
@@ -436,35 +465,16 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
           return;
         }
 
-        updateNovel({ readerExperience });
-        set((s) => ({ completedSteps: [...s.completedSteps, 4] }));
-        get()._setProgress(Math.round(5 * 100 / TOTAL_STEPS));
-        await saveStep(4, { readerExperience });
-
-        // Step 5: 叙事约束（串行执行）
-        set({ currentStep: 5 });
-        startProgressSimulation(5);
-
-        const narConBatchInfo = computeNarrativeConstraintsBatches(slices, aiConfig.maxContextTokens);
-        const narrativeConstraints = await runMultiBatch(
-          slices, narConBatchInfo,
-          '/api/source/process/narrative-constraints',
-          () => getNarrativeConstraintsExtractionRequestBody(slices, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
-          (chunk, prev) => getNarrativeConstraintsSupplementRequestBody(chunk, prev, narrativeReport, characterDynamics, aiConfig.apiKey, aiConfig.model, aiConfig.baseURL),
-          5,
-        );
-
-        stopProgressSimulation();
-
         if (!narrativeConstraints) {
           const errMsg = get().streamErrors[5] || '叙事约束分析失败，请检查 API 配置';
           reportError(5, errMsg);
           return;
         }
 
-        updateNovel({ narrativeConstraints });
-        set((s) => ({ completedSteps: [...s.completedSteps, 5] }));
+        updateNovel({ readerExperience, narrativeConstraints });
+        set((s) => ({ completedSteps: [...s.completedSteps, 4, 5] }));
         get()._setProgress(Math.round(6 * 100 / TOTAL_STEPS));
+        await saveStep(4, { readerExperience });
         await saveStep(5, { narrativeConstraints });
 
         // ── Step 6: 样本选取 ──
@@ -539,6 +549,81 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
     })();
   },
 
+  /** 道/气深度分析 — 在基础 8 步管线完成后运行 */
+  startDaoAnalysis: (novelId: string) => {
+    if (get().isRunningDao) return;
+
+    // 获取 AI 配置
+    const settings = useSettingsStore.getState();
+    const aiConfig: AIConfig = {
+      apiKey: settings.getEffectiveApiKey(),
+      model: settings.model,
+      baseURL: settings.baseURL,
+      maxContextTokens: settings.maxContextTokens,
+    };
+
+    const libraryStore = useSourceLibraryStore.getState();
+    const novel = libraryStore.sourceNovels.find((n) => n.id === novelId);
+    if (!novel || !novel.slices) {
+      set({ daoError: '缺少切片数据，请先完成基础分析' });
+      return;
+    }
+
+    set({
+      isRunningDao: true,
+      daoProgress: 0,
+      daoCurrentStep: '准备中...',
+      daoError: null,
+    });
+
+    (async () => {
+      try {
+        const result = await runDaoPipeline(novel, aiConfig, {
+          onStepStart: (step, message) => {
+            set({ daoCurrentStep: message, daoProgress: get().daoProgress });
+          },
+          onStepComplete: (step) => {
+            const stepProgress = (DAO_TOTAL_STEPS > 0) ? Math.round(100 / DAO_TOTAL_STEPS) : 25;
+            set({ daoProgress: Math.min(100, get().daoProgress + stepProgress) });
+          },
+          onStepError: (step, error) => {
+            set({ daoError: `${step}: ${error}` });
+          },
+          onProgress: (progress) => {
+            set({ daoProgress: progress });
+          },
+        });
+
+        // 保存道/气分析结果到小说
+        const updates: Record<string, unknown> = {};
+        if (result.experienceCurve.length > 0) updates.experienceCurve = result.experienceCurve;
+        if (result.ablationResults.length > 0) updates.ablationResults = result.ablationResults;
+        if (result.tensionAnalysis) updates.tensionAnalysis = result.tensionAnalysis;
+        if (result.novelDnaV2) updates.novelDnaV2 = result.novelDnaV2;
+        if (result.techniqueSamples) updates.techniqueSamples = result.techniqueSamples;
+
+        libraryStore.updateSourceNovel(novelId, updates);
+
+        // 保存到文件系统
+        try {
+          await fetch('/api/library/save-step', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: novelId, step: 8, data: updates }),
+          });
+        } catch (err) {
+          console.error('保存道/气分析结果失败:', err);
+        }
+
+        set({ isRunningDao: false, daoProgress: 100, daoCurrentStep: '完成' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '道/气分析异常';
+        console.error('道/气分析异常:', err);
+        set({ isRunningDao: false, daoError: msg, daoCurrentStep: '失败' });
+      }
+    })();
+  },
+
   cancelProcessing: () => {
     streamFetcher.abort();
     const novelId = get().processingNovelId;
@@ -552,6 +637,10 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
       isStreaming: createFilledArray(TOTAL_STEPS, false),
       progress: 0,
       errorMessage: null,
+      isRunningDao: false,
+      daoProgress: 0,
+      daoCurrentStep: '',
+      daoError: null,
     });
   },
 
@@ -568,6 +657,10 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
       errorMessage: null,
       isRunningAll: false,
       progress: 0,
+      isRunningDao: false,
+      daoProgress: 0,
+      daoCurrentStep: '',
+      daoError: null,
     });
   },
 }));
