@@ -28,9 +28,13 @@ export const PROMPT_REGISTRY: PromptMeta[] = [
   { key: 'source-reader-experience-supplement', label: '读者体验补充', category: '素材处理', description: '多批次处理时补充读者体验分析' },
   { key: 'source-narrative-constraints', label: '叙事约束', category: '素材处理', description: '降温机制+结构异常+风险模式+叙事禁忌+交叉审查' },
   { key: 'source-narrative-constraints-supplement', label: '叙事约束补充', category: '素材处理', description: '多批次处理时补充叙事约束分析' },
-  { key: 'source-evolution-modeling', label: '演化建模', category: '素材处理', description: 'AI自动识别叙事阶段+驱动变迁曲线+谜团密度曲线+世界扩展曲线' },
   { key: 'source-dna-compression', label: 'DNA压缩', category: '素材处理', description: '双层压缩：DNA超压缩(500字)+Genome完整基因库(5-10K字)' },
   { key: 'source-samples', label: '样本选取', category: '素材处理', description: '精选 3-5 个代表性切片（含高潮蓄能/情绪转换/异常结构）' },
+  // 进阶分析 — 道/气 + 事件图谱
+  { key: 'experience-annotation', label: '体验流标注', category: '进阶分析', description: '3个读者persona对切片打分（沉浸感/情绪/期待/节奏），聚合体验曲线' },
+  { key: 'ablation-testing', label: '消融测试', category: '进阶分析', description: '四分类评估每个切片（骨架/肌肉/体验填充/机械填充），识别核心叙事元素' },
+  { key: 'tension-tracking', label: '势能追踪', category: '进阶分析', description: '追踪高潮的积累→释放周期，计算势能模式和节奏画像' },
+  { key: 'event-extraction', label: '事件图谱提取', category: '进阶分析', description: '从文本中提取结构化事件（12类），标注因果链和伏笔关系' },
   // 层级生成
   { key: 'outline', label: '全书大纲', category: '层级生成', description: '基于大情节框架和创作想法生成 ~200 字大纲' },
   { key: 'phase-framework', label: '阶段框架', category: '层级生成', description: '规划 4-6 个阶段的标题和章节范围' },

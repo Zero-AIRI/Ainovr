@@ -3,7 +3,14 @@
 // ============================================
 
 import { create } from 'zustand';
-import type { SourceNovel, PipelineTask } from '@/types';
+import type { SourceNovel, SourceNovelStatus, PipelineTask } from '@/types';
+
+/** 处理中的过渡态 — 页面刷新后不应残留 */
+const TRANSIENT_STATUSES: SourceNovelStatus[] = [
+  'indexing', 'segmenting', 'slicing', 'extracting',
+  'character_dynamics', 'deep_analyzing', 'selecting',
+  'evolution_modeling', 'compressing',
+];
 
 export interface SourceLibraryState {
   /** 浏览器内存缓存 */
@@ -36,7 +43,12 @@ export const useSourceLibraryStore = create<SourceLibraryState>()((set) => ({
       const res = await fetch('/api/library/list');
       if (!res.ok) return;
       const data = await res.json();
-      set({ sourceNovels: data.novels ?? [] });
+      const novels: SourceNovel[] = (data.novels ?? []).map((n: SourceNovel) =>
+        TRANSIENT_STATUSES.includes(n.status)
+          ? { ...n, status: 'error' as SourceNovelStatus }
+          : n,
+      );
+      set({ sourceNovels: novels });
     } catch (err) {
       console.error('加载素材库失败:', err);
     }

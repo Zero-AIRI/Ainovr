@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { usePromptStore, PROMPT_REGISTRY } from '@/lib/store/prompts';
 
 /** 按分类分组 */
-const CATEGORIES = ['素材处理', '层级生成', '章节写作'];
+const CATEGORIES = ['素材处理', '进阶分析', '层级生成', '章节写作'];
 
 export function PromptManagementView() {
   const { loadPrompts, defaultPrompts, customPrompts, saveCustomPrompt, loaded } = usePromptStore();
