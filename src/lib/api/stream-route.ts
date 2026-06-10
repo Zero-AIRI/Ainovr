@@ -45,6 +45,7 @@ async function handleStreamRequest(
 ): Promise<Response> {
   const body = await req.json() as Record<string, unknown>;
   const { apiKey, model, baseURL } = body;
+  const thinkingMode = body.thinkingMode as boolean | undefined;
 
   if (!apiKey) {
     return new Response(JSON.stringify({ error: '请先配置 API Key' }), { status: 400 });
@@ -64,7 +65,7 @@ async function handleStreamRequest(
   }
 
   const stream = chatCompletionStream(
-    { apiKey: apiKey as string, model: (model as string) || DEFAULT_MODEL, baseURL: (baseURL as string) || DEFAULT_BASE_URL },
+    { apiKey: apiKey as string, model: (model as string) || DEFAULT_MODEL, baseURL: (baseURL as string) || DEFAULT_BASE_URL, thinkingMode },
     { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: config.maxTokens ?? 8192 },
   );
 

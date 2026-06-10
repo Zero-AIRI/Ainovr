@@ -16,6 +16,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
 
 interface SettingsDialogProps {
@@ -28,6 +29,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const storeModel = useSettingsStore((s) => s.model);
   const storeBaseURL = useSettingsStore((s) => s.baseURL);
   const storeMaxContextTokens = useSettingsStore((s) => s.maxContextTokens);
+  const storeThinkingMode = useSettingsStore((s) => s.thinkingMode);
   const setAISettings = useSettingsStore((s) => s.setAISettings);
 
   // 本地编辑状态
@@ -35,6 +37,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [model, setModel] = useState('');
   const [baseURL, setBaseURL] = useState('');
   const [maxContextTokens, setMaxContextTokens] = useState(1000000);
+  const [thinkingMode, setThinkingMode] = useState(true);
 
   // 弹窗打开时从 store 同步到本地编辑状态
   function handleOpenChange(isOpen: boolean) {
@@ -43,6 +46,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       setModel(storeModel);
       setBaseURL(storeBaseURL);
       setMaxContextTokens(storeMaxContextTokens);
+      setThinkingMode(storeThinkingMode);
     }
     onOpenChange(isOpen);
   }
@@ -53,6 +57,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       model: model.trim() || DEFAULT_MODEL,
       baseURL: baseURL.trim() || DEFAULT_BASE_URL,
       maxContextTokens: maxContextTokens > 0 ? maxContextTokens : 1000000,
+      thinkingMode,
     });
     handleOpenChange(false);
   };
@@ -95,6 +100,18 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               placeholder="deepseek-v4-flash"
               value={model}
               onChange={(e) => setModel(e.target.value)}
+            />
+          </div>
+
+          {/* 思考模式 */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label>思考模式</Label>
+              <p className="text-xs text-muted-foreground">开启后模型先内部推理再输出，提升分析质量但耗时更长</p>
+            </div>
+            <Switch
+              checked={thinkingMode}
+              onCheckedChange={setThinkingMode}
             />
           </div>
 

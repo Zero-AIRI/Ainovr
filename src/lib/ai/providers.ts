@@ -36,6 +36,7 @@ interface ModelOptions {
   apiKey: string;
   model: string;
   baseURL: string;
+  thinkingMode?: boolean;
 }
 
 interface ChatParams {
@@ -57,6 +58,14 @@ export function chatCompletionStream(options: ModelOptions, params: ChatParams):
     max_tokens: params.maxTokens ?? 4096,
     stream: true,
   };
+
+  // DeepSeek 思考模式
+  if (options.thinkingMode) {
+    body.thinking = { type: 'enabled' };
+    body.reasoning_effort = 'high';
+  } else {
+    body.thinking = { type: 'disabled' };
+  }
 
   const url = `${options.baseURL.replace(/\/$/, '')}/chat/completions`;
 

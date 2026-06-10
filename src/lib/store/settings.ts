@@ -12,8 +12,9 @@ export interface SettingsState {
   model: string;
   baseURL: string;
   maxContextTokens: number;
+  thinkingMode: boolean;
 
-  setAISettings: (settings: Partial<Pick<SettingsState, 'apiKey' | 'model' | 'baseURL' | 'maxContextTokens'>>) => void;
+  setAISettings: (settings: Partial<Pick<SettingsState, 'apiKey' | 'model' | 'baseURL' | 'maxContextTokens' | 'thinkingMode'>>) => void;
   getEffectiveApiKey: () => string;
   getAIConfig: () => AIConfig;
 }
@@ -25,6 +26,7 @@ export const useSettingsStore = create<SettingsState>()(
       model: DEFAULT_MODEL,
       baseURL: DEFAULT_BASE_URL,
       maxContextTokens: 1000000,
+      thinkingMode: true,
 
       setAISettings: (settings) => set(settings),
 
@@ -39,11 +41,12 @@ export const useSettingsStore = create<SettingsState>()(
         model: get().model,
         baseURL: get().baseURL,
         maxContextTokens: get().maxContextTokens,
+        thinkingMode: get().thinkingMode,
       }),
     }),
     {
       name: 'ainovr-settings',
-      version: 7,
+      version: 8,
       migrate: (persisted, version) => {
         let state = persisted as Record<string, unknown>;
 
@@ -82,6 +85,10 @@ export const useSettingsStore = create<SettingsState>()(
             ...state,
             maxContextTokens: (state.maxContextTokens as number) || 1000000,
           };
+        }
+        // v8: thinkingMode 重新引入（默认开启）
+        if (version <= 7) {
+          state = { ...state, thinkingMode: true };
         }
         return state;
       },

@@ -1,6 +1,7 @@
 // ============================================
 // 共享流式 fetch 工具 — 统一所有管线的 HTTP 流式请求
 // dao-pipeline、source-processing store、layer-pipeline 均使用此模块
+// 自动注入 thinkingMode，无需每个 get*RequestBody() 手动传递
 // ============================================
 
 /** AI 配置（统一类型，替代各文件中重复定义的同名接口） */
@@ -9,6 +10,7 @@ export interface AIConfig {
   model: string;
   baseURL: string;
   maxContextTokens: number;
+  thinkingMode?: boolean;
 }
 
 // ---- 流式状态 ----
@@ -36,10 +38,14 @@ export function createStreamFetcher() {
       const state: StreamState = { content: '', isStreaming: true, error: null };
 
       try {
+        // 从 settings store 自动注入 thinkingMode
+        let thinkingMode: boolean | undefined;
+        try { thinkingMode = (await import('@/lib/store/settings')).useSettingsStore.getState().thinkingMode; } catch { /* store 未初始化 */ }
+
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, thinkingMode }),
           signal: controller.signal,
         });
 
