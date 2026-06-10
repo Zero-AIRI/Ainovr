@@ -75,8 +75,8 @@ export function parseTensionAnalysis(raw: string, slices: SemanticSlice[]): Tens
           chapter: slices[Number(p.climaxSliceIndex)]?.chapterRange ?? '',
           type: 'release' as const,
           description: String(p.climaxDescription ?? ''),
-          tensionBefore: 9,
-          tensionAfter: 3,
+          tensionBefore: Math.min(10, Math.max(1, Number(p.tension_before ?? 9))),
+          tensionAfter: Math.min(10, Math.max(1, Number(p.tension_after ?? 3))),
         },
         payoffMultiplier: VALID_PAYOFFS.has(String(p.payoffMultiplier)) ? String(p.payoffMultiplier) as TensionPattern['payoffMultiplier'] : 'medium',
         description: String(p.climaxDescription ?? ''),
@@ -96,7 +96,8 @@ export function parseTensionAnalysis(raw: string, slices: SemanticSlice[]): Tens
       breathingCycle: String(parsed.breathingCycle ?? '未知'),
       rhythmProfile,
     };
-  } catch {
+  } catch (err) {
+    console.error('势能追踪结果解析失败:', err);
     return null;
   }
 }

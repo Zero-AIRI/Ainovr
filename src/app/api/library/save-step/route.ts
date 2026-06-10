@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { safeJoin } from '@/lib/safe-path';
+import { atomicWriteJson, atomicWriteText } from '@/lib/atomic-write';
 
 const LIBRARY_DIR = path.join(process.cwd(), 'data', 'source_library');
 
@@ -32,10 +33,9 @@ export async function POST(req: NextRequest) {
     switch (step) {
       case 0: { // 切片
         if (data.slices) {
-          await fs.writeFile(
+          await atomicWriteJson(
             path.join(novelDir, 'slices.json'),
-            JSON.stringify(data.slices, null, 2),
-            'utf-8',
+            data.slices,
           );
           meta = { ...meta, sliceCount: data.slices.length, status: 'slicing' };
         }
@@ -43,10 +43,9 @@ export async function POST(req: NextRequest) {
       }
       case 1: { // 文风
         if (data.styleProfile) {
-          await fs.writeFile(
+          await atomicWriteText(
             path.join(novelDir, 'style_profile.md'),
             data.styleProfile,
-            'utf-8',
           );
           meta = { ...meta, hasStyleProfile: true, status: 'extracting' };
         }
@@ -54,10 +53,9 @@ export async function POST(req: NextRequest) {
       }
       case 2: { // 叙事动力学（原情节提取）
         if (data.plotReport) {
-          await fs.writeFile(
+          await atomicWriteText(
             path.join(novelDir, 'plot_report.md'),
             data.plotReport,
-            'utf-8',
           );
           meta = { ...meta, hasPlotReport: true, hasNarrativeDynamics: true };
         }
@@ -65,10 +63,9 @@ export async function POST(req: NextRequest) {
       }
       case 3: { // 角色动力学
         if (data.characterDynamics) {
-          await fs.writeFile(
+          await atomicWriteText(
             path.join(novelDir, 'character_dynamics.md'),
             data.characterDynamics,
-            'utf-8',
           );
           meta = { ...meta, hasCharacterDynamics: true, status: 'character_dynamics' };
         }
@@ -76,10 +73,9 @@ export async function POST(req: NextRequest) {
       }
       case 4: { // 读者体验
         if (data.readerExperience) {
-          await fs.writeFile(
+          await atomicWriteText(
             path.join(novelDir, 'reader_experience.md'),
             data.readerExperience,
-            'utf-8',
           );
           meta = { ...meta, hasReaderExperience: true };
         }
@@ -87,10 +83,9 @@ export async function POST(req: NextRequest) {
       }
       case 5: { // 叙事约束
         if (data.narrativeConstraints) {
-          await fs.writeFile(
+          await atomicWriteText(
             path.join(novelDir, 'narrative_constraints.md'),
             data.narrativeConstraints,
-            'utf-8',
           );
           meta = { ...meta, hasNarrativeConstraints: true };
         }
@@ -98,10 +93,9 @@ export async function POST(req: NextRequest) {
       }
       case 6: { // 样本选取
         if (data.representativeSamples) {
-          await fs.writeFile(
+          await atomicWriteJson(
             path.join(novelDir, 'samples.json'),
-            JSON.stringify(data.representativeSamples, null, 2),
-            'utf-8',
+            data.representativeSamples,
           );
           meta = {
             ...meta,
@@ -112,10 +106,9 @@ export async function POST(req: NextRequest) {
       }
       case 7: { // DNA 压缩
         if (data.novelDna) {
-          await fs.writeFile(
+          await atomicWriteText(
             path.join(novelDir, 'novel_dna.yaml'),
             data.novelDna,
-            'utf-8',
           );
           meta = {
             ...meta,
@@ -130,8 +123,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `未知步骤: ${step}` }, { status: 400 });
     }
 
-    // 更新 meta.json
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+    // 更新 meta.json（原子写入防止崩溃时损坏）
+    await atomicWriteJson(metaPath, meta);
 
     return NextResponse.json({ success: true, id, step });
   } catch (error: unknown) {

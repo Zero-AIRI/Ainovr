@@ -6,18 +6,19 @@
 
 import { useEffect } from 'react';
 import { useProjectStore } from '@/lib/store/project';
+import { useNavigationStore } from '@/lib/store/navigation';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { Sidebar } from '@/components/Sidebar';
 import { SourceLibraryView } from '@/components/source/SourceLibraryView';
 import { SourceNovelDetailView } from '@/components/source/SourceNovelDetailView';
-import { SourceProcessView } from '@/components/source/SourceProcessView';
+
 import { WritingProjectView } from '@/components/project/WritingProjectView';
 import { LayerGenerationView } from '@/components/generation/LayerGenerationView';
 import { ChapterGenerationView } from '@/components/chapter/ChapterGenerationView';
 import { PromptManagementView } from '@/components/prompts/PromptManagementView';
 
 export default function HomePage() {
-  const activeView = useProjectStore((s) => s.activeView);
+  const activeView = useNavigationStore((s) => s.activeView);
   const loadSourceNovels = useSourceLibraryStore((s) => s.loadSourceNovels);
   const loadProjects = useProjectStore((s) => s.loadProjects);
 
@@ -34,8 +35,6 @@ export default function HomePage() {
         {activeView === 'source-detail' && <SourceNovelDetailView />}
         {activeView === 'writing-project' && <WritingProjectView />}
         {activeView === 'prompt-management' && <PromptManagementView />}
-        {/* 旧视图兼容 — 迁移完成后移除 */}
-        {activeView === 'source-process' && <SourceProcessView />}
         {activeView === 'layer-generation' && <LayerGenerationView />}
         {activeView === 'chapter-generation' && <ChapterGenerationView />}
       </main>

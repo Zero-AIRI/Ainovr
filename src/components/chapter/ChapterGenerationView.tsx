@@ -7,6 +7,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { ArrowLeft, Play, Loader2 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store/project';
+import { useNavigationStore } from '@/lib/store/navigation';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
@@ -19,9 +20,10 @@ import type { GeneratedChapter, ChapterPlan } from '@/types';
 import { nanoid } from 'nanoid';
 
 export function ChapterGenerationView({ embedded = false }: { embedded?: boolean }) {
-  const { projects, activeProjectId, setActiveView, addGeneratedChapter, updateGeneratedChapter } = useProjectStore();
+  const { projects, activeProjectId, addGeneratedChapter, updateGeneratedChapter } = useProjectStore();
+  const setActiveView = useNavigationStore((s) => s.setActiveView);
   const { sourceNovels } = useSourceLibraryStore();
-  const { getEffectiveApiKey, model, baseURL } = useSettingsStore();
+  const getAIConfig = useSettingsStore((s) => s.getAIConfig);
 
   // 用 useMemo 稳定派生值，避免 useCallback 依赖在每次渲染时变化
   const project = useMemo(() => projects.find((p) => p.id === activeProjectId), [projects, activeProjectId]);
@@ -47,7 +49,7 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
   const handleGenerate = useCallback(async (plan: ChapterPlan) => {
     if (!project) return;
 
-    const ai = { apiKey: getEffectiveApiKey(), model, baseURL };
+    const ai = getAIConfig();
     const ctx = assembleLayerContext(5, projectSources, project, plan.id);
 
     const result = await generateStream.startFetch('/api/chapter/generate', {
@@ -76,14 +78,14 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
       setCurrentChapter(chapter);
       addGeneratedChapter(project.id, chapter);
     }
-  }, [project, projectSources, getEffectiveApiKey, model, baseURL, generateStream, addGeneratedChapter]);
+  }, [project, projectSources, getAIConfig, generateStream, addGeneratedChapter]);
 
   // 自动审查
   const handleReview = useCallback(async () => {
     if (!currentChapter || !project) return;
     const chapterId = currentChapter.id;
 
-    const ai = { apiKey: getEffectiveApiKey(), model, baseURL };
+    const ai = getAIConfig();
     const ctx = assembleLayerContext(5, projectSources, project, currentChapter.chapterPlanId);
 
     const result = await reviewStream.startFetch('/api/chapter/review', {
@@ -106,14 +108,14 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
       setCurrentChapter((prev) => prev ? { ...prev, ...updated } : null);
       if (project) updateGeneratedChapter(project.id, chapterId, updated);
     }
-  }, [currentChapter, project, projectSources, getEffectiveApiKey, model, baseURL, reviewStream, updateGeneratedChapter]);
+  }, [currentChapter, project, projectSources, getAIConfig, reviewStream, updateGeneratedChapter]);
 
   // 修正
   const handleRevise = useCallback(async (feedback?: string) => {
     if (!currentChapter || !project || currentChapter.revisionCount >= 3) return;
     const chapterId = currentChapter.id;
 
-    const ai = { apiKey: getEffectiveApiKey(), model, baseURL };
+    const ai = getAIConfig();
     const ctx = assembleLayerContext(5, projectSources, project, currentChapter.chapterPlanId);
     const reviewsText = currentChapter.reviews.map((r) =>
       `${r.dimension}: ${r.score}/10 - ${r.issues.join(', ')}`
@@ -141,7 +143,7 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
       setCurrentChapter((prev) => prev ? { ...prev, ...updated } : null);
       updateGeneratedChapter(project.id, chapterId, updated);
     }
-  }, [currentChapter, project, projectSources, getEffectiveApiKey, model, baseURL, reviseStream, updateGeneratedChapter]);
+  }, [currentChapter, project, projectSources, getAIConfig, reviseStream, updateGeneratedChapter]);
 
   if (!project) {
     return (

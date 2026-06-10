@@ -6,7 +6,7 @@
 
 import { FileText, CheckCircle, XCircle, Eye } from 'lucide-react';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
-import { useProjectStore } from '@/lib/store/project';
+import { useNavigationStore } from '@/lib/store/navigation';
 import type { SourceNovel } from '@/types';
 
 function formatChars(n: number): string {
@@ -71,7 +71,7 @@ export function StylePlotLibraryView() {
   const { sourceNovels } = useSourceLibraryStore();
   const { setActiveSourceId, setActiveView } = {
     setActiveSourceId: useSourceLibraryStore((s) => s.setActiveSourceId),
-    setActiveView: useProjectStore((s) => s.setActiveView),
+    setActiveView: useNavigationStore((s) => s.setActiveView),
   };
 
   // 只显示已处理或有部分结果的小说

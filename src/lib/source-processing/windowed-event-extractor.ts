@@ -5,16 +5,13 @@
 
 import { buildEventExtractionMessages } from '@/lib/ai/prompts';
 import { computeMaxCharsPerBatch } from '@/lib/analysis-chunker';
+import { type AIConfig, type StreamState } from '@/lib/stream-fetcher';
 import type { TextChunk, NovelEvent, EventGraph } from '@/types';
 
 // ---- 类型 ----
 
-interface AIConfig {
-  apiKey: string; model: string; baseURL: string; maxContextTokens: number;
-}
-
 interface StreamFetcher {
-  fetch(url: string, body: object): Promise<{ result: string | null; state: { error: string | null } }>;
+  fetch(url: string, body: object): Promise<{ result: string | null; state: StreamState }>;
 }
 
 /** 单窗口配置 */
@@ -117,14 +114,9 @@ export async function runWindowedEventExtraction(
         .map((c) => `## Chunk ${c.index}: ${c.title}\n\n${c.content}`)
         .join('\n\n---\n\n');
 
-      // 前一窗口已知事件 ID（用于重叠区引用）
-      const prevWin = windows.find(
-        (w) => w.endChunk > win.startChunk && w.endChunk < win.endChunk
-      );
-      const prevEventIds = prevWin ? '' : '';
-
+      // TODO: 重叠区事件引用机制尚未实现，后续可传入前窗口事件 ID 提升合并质量
       const { systemPrompt, userMessage } = buildEventExtractionMessages(
-        chunksText, entityDict, win.id, prevEventIds,
+        chunksText, entityDict, win.id, '',
       );
 
       const res = await fetcher.fetch('/api/source/process/event-extraction', {
@@ -199,7 +191,7 @@ function mergeOverlappingEvents(
   chunks: TextChunk[],
 ): NovelEvent[] {
   const allEvents: NovelEvent[] = [];
-  const seenInOverlap = new Set<string>(); // 已匹配的事件对 "win1-id|win2-id"
+  const mergedNextEventIds = new Set<string>(); // 被合并的下一窗口事件 ID
 
   for (let i = 0; i < windowResults.length; i++) {
     const currentWin = windowResults[i];
@@ -230,7 +222,7 @@ function mergeOverlappingEvents(
               effects: [...new Set([...event.effects, ...nextEvent.effects])],
             };
             allEvents.push(mergedEvent);
-            seenInOverlap.add(`${event.id}|${nextEvent.id}`);
+            mergedNextEventIds.add(nextEvent.id);
             merged = true;
             break;
           }
@@ -245,8 +237,7 @@ function mergeOverlappingEvents(
     // 添加下一窗口中未被合并的事件
     if (nextWin) {
       for (const nextEvent of nextWin.events) {
-        const wasMerged = [...seenInOverlap].some((pair) => pair.endsWith(`|${nextEvent.id}`));
-        if (!wasMerged) {
+        if (!mergedNextEventIds.has(nextEvent.id)) {
           allEvents.push(nextEvent);
         }
       }
@@ -272,8 +263,9 @@ function buildEventGraph(events: NovelEvent[], novelId: string, chunks: TextChun
   const byChapter: Record<number, string[]> = {};
   const byParticipant: Record<string, string[]> = {};
   const byType: Record<string, string[]> = {};
-
+  const eventById = new Map<string, NovelEvent>();
   for (const e of events) {
+    eventById.set(e.id, e);
     (byChapter[e.chapter] ??= []).push(e.id);
     for (const p of e.participants) {
       (byParticipant[p] ??= []).push(e.id);
@@ -285,7 +277,7 @@ function buildEventGraph(events: NovelEvent[], novelId: string, chunks: TextChun
   const foreshadowingPairs: EventGraph['foreshadowingPairs'] = [];
   for (const e of events) {
     if (e.foreshadowingOf) {
-      const payoff = events.find((ev) => ev.id === e.foreshadowingOf);
+      const payoff = eventById.get(e.foreshadowingOf);
       if (payoff) {
         foreshadowingPairs.push({
           setup: e.id,

@@ -13,14 +13,14 @@ import {
   Loader2,
   FileCode,
 } from 'lucide-react';
-import { useProjectStore } from '@/lib/store/project';
+import { useNavigationStore } from '@/lib/store/navigation';
 import { useSourceProcessingStore } from '@/lib/store/source-processing';
 import type { ActiveView } from '@/types';
 import { SettingsDialog } from '@/components/SettingsDialog';
 
 export function Sidebar() {
-  const activeView = useProjectStore((s) => s.activeView);
-  const setActiveView = useProjectStore((s) => s.setActiveView);
+  const activeView = useNavigationStore((s) => s.activeView);
+  const setActiveView = useNavigationStore((s) => s.setActiveView);
   const processingNovelId = useSourceProcessingStore((s) => s.processingNovelId);
   const [settingsOpen, setSettingsOpen] = useState(false);
 

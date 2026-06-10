@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { useSourceProcessingStore } from '@/lib/store/source-processing';
 import { useSettingsStore } from '@/lib/store/settings';
-import { useProjectStore } from '@/lib/store/project';
+import { useNavigationStore } from '@/lib/store/navigation';
 import { MarkdownViewer } from './MarkdownViewer';
 import { StreamingText } from '@/components/StreamingText';
 
@@ -38,8 +38,8 @@ const TABS: { key: AnalysisTab; label: string; field: string }[] = [
 
 export function SourceNovelDetailView() {
   const { sourceNovels, activeSourceId, setActiveSourceId } = useSourceLibraryStore();
-  const setActiveView = useProjectStore((s) => s.setActiveView);
-  const { getEffectiveApiKey, model, baseURL, maxContextTokens } = useSettingsStore();
+  const setActiveView = useNavigationStore((s) => s.setActiveView);
+  const getAIConfig = useSettingsStore((s) => s.getAIConfig);
   const processingStore = useSourceProcessingStore();
 
   const novel = sourceNovels.find((n) => n.id === activeSourceId);
@@ -87,12 +87,7 @@ export function SourceNovelDetailView() {
 
   const handleStartProcessing = () => {
     if (!rawText || isAnyProcessing) return;
-    processingStore.startProcessing(novel.id, rawText, {
-      apiKey: getEffectiveApiKey(),
-      model,
-      baseURL,
-      maxContextTokens,
-    });
+    processingStore.startProcessing(novel.id, rawText, getAIConfig());
   };
 
   const handleCancel = () => {
@@ -118,12 +113,7 @@ export function SourceNovelDetailView() {
       return;
     }
 
-    processingStore.startProcessing(novel.id, text, {
-      apiKey: getEffectiveApiKey(),
-      model,
-      baseURL,
-      maxContextTokens,
-    });
+    processingStore.startProcessing(novel.id, text, getAIConfig());
   };
 
   const isReady = novel.status === 'ready';
@@ -198,6 +188,17 @@ export function SourceNovelDetailView() {
               >
                 <Play className="w-4 h-4" />
                 一键分析
+              </button>
+            )}
+            {/* 断点恢复按钮：仅在有部分完成的步骤且当前未在处理时显示 */}
+            {!isThisProcessing && processingStore.errorStep !== null && processingStore.completedSteps.length > 0 && (
+              <button
+                onClick={() => processingStore.resumeProcessing(novel.id)}
+                disabled={isAnyProcessing}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-primary/30 bg-primary/5 text-primary text-sm hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Play className="w-4 h-4" />
+                恢复处理（已完成 {processingStore.completedSteps.length}/{STEPS.length} 步）
               </button>
             )}
           </div>

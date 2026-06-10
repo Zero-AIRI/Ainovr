@@ -20,6 +20,7 @@ import {
   parseTensionAnalysis,
 } from './tension-tracker';
 import { READER_PERSONAS } from '@/lib/ai/prompts';
+import { createStreamFetcher, type AIConfig } from '@/lib/stream-fetcher';
 import type {
   SemanticSlice,
   ExperienceAnnotation,
@@ -37,77 +38,6 @@ import type {
   SourceNovel,
   EventGraph,
 } from '@/types';
-
-// ---- 流式 fetch 工具 ----
-
-interface StreamState {
-  content: string;
-  isStreaming: boolean;
-  error: string | null;
-}
-
-function createStreamFetcher() {
-  let abortController: AbortController | null = null;
-
-  return {
-    abort() { abortController?.abort(); abortController = null; },
-
-    async fetch(url: string, body: object): Promise<{ result: string | null; state: StreamState }> {
-      const controller = new AbortController();
-      abortController = controller;
-      const state: StreamState = { content: '', isStreaming: true, error: null };
-
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({ error: '请求失败' }));
-          throw new Error(err.error || `${response.status} 请求失败`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('无法读取响应流');
-
-        const decoder = new TextDecoder();
-        let fullText = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          fullText += decoder.decode(value, { stream: true });
-          state.content = fullText;
-        }
-
-        if (!fullText.trim()) throw new Error('模型返回了空响应');
-        state.isStreaming = false;
-        return { result: fullText, state };
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          state.isStreaming = false;
-          return { result: null, state };
-        }
-        state.error = err instanceof Error ? err.message : '未知错误';
-        state.isStreaming = false;
-        return { result: null, state };
-      } finally {
-        if (abortController === controller) abortController = null;
-      }
-    },
-  };
-}
-
-// ---- AI 配置 ----
-
-interface AIConfig {
-  apiKey: string;
-  model: string;
-  baseURL: string;
-  maxContextTokens: number;
-}
 
 // ---- 回调接口 ----
 
@@ -292,9 +222,10 @@ function buildNovelDNA(inputs: {
   } = inputs;
 
   // 道：从体验曲线推断主情绪场
+  const sliceByIndex = new Map(slices.map((s) => [s.index, s] as const));
   const highPointSlices = experienceCurve.filter((c) => c.highPoints);
   const emotionalTones = highPointSlices.map((hp) => {
-    const slice = slices.find((s) => s.index === hp.sliceIndex);
+    const slice = sliceByIndex.get(hp.sliceIndex);
     return slice?.emotionalTone ?? '';
   }).filter(Boolean);
 
@@ -306,10 +237,10 @@ function buildNovelDNA(inputs: {
   // 结构
   const bones = ablationResults
     .filter((r) => r.category === 'bone')
-    .map((r) => ({ description: r.lostIfRemoved, evidence: [slices[r.sliceIndex]?.title ?? ''] }));
+    .map((r) => ({ description: r.lostIfRemoved, evidence: [sliceByIndex.get(r.sliceIndex)?.title ?? ''] }));
   const muscles = ablationResults
     .filter((r) => r.category === 'muscle')
-    .map((r) => ({ description: r.lostIfRemoved, evidence: [slices[r.sliceIndex]?.title ?? ''] }));
+    .map((r) => ({ description: r.lostIfRemoved, evidence: [sliceByIndex.get(r.sliceIndex)?.title ?? ''] }));
   const fillerTypeA = ablationResults
     .filter((r) => r.category === 'filler_a')
     .map((r) => ({ description: r.lostIfRemoved, purpose: r.reasoning }));
@@ -337,7 +268,7 @@ function buildNovelDNA(inputs: {
     maintenanceMethods,
     breathingCycleDescription: tensionAnalysis?.breathingCycle ?? '未知',
     rhythmProfile: tensionAnalysis?.rhythmProfile ?? null,
-    disruptors: ['连续高潮缺乏呼吸段落', '角色决策违背默认模式'],
+    disruptors: inferDisruptors(tensionAnalysis, ablationResults),
   };
 
   const structure: NovelStructure = {
@@ -440,7 +371,7 @@ export function buildNovelDNAFromEventGraph(eventGraph: EventGraph, styleProfile
   if (dailyRatio > 0.2) maintenanceMethods.push(`大量日常/过渡事件（${Math.round(dailyRatio * 100)}%）维持阅读状态`);
   if (combatRatio > 0.2) maintenanceMethods.push(`高频战斗/冲突事件（${Math.round(combatRatio * 100)}%）维持紧张感`);
 
-  const avgTensionChange = events.reduce((s, e) => s + e.tensionChange, 0) / events.length;
+  const avgTensionChange = events.reduce((s, e) => s + e.tensionChange, 0) / (events.length || 1);
   if (avgTensionChange > 1) maintenanceMethods.push('整体上升的紧张趋势维持驱动感');
   else if (avgTensionChange < -1) maintenanceMethods.push('整体下降的紧张趋势维持安全感');
   else maintenanceMethods.push('均衡的张弛节奏');
@@ -527,6 +458,25 @@ export function buildNovelDNAFromEventGraph(eventGraph: EventGraph, styleProfile
   };
 }
 
+/** 根据分析结果推断破坏阅读状态的因素 */
+function inferDisruptors(tensionAnalysis: TensionAnalysis | null, ablationResults: AblationResult[]): string[] {
+  const disruptors: string[] = [];
+  if (tensionAnalysis) {
+    const longAccumulations = tensionAnalysis.patterns.filter((p) => p.duration > 20);
+    if (longAccumulations.length > 0) {
+      disruptors.push(`${longAccumulations.length} 处势能积累周期过长（>20 切片），可能导致读者疲劳`);
+    }
+  }
+  const fillerBCount = ablationResults.filter((r) => r.category === 'filler_b').length;
+  if (fillerBCount > ablationResults.length * 0.1) {
+    disruptors.push(`${fillerBCount} 段机械填充可能打断阅读节奏`);
+  }
+  if (disruptors.length === 0) {
+    disruptors.push('未检测到明显破坏因素');
+  }
+  return disruptors;
+}
+
 function inferMaintenanceMethods(
   ablationResults: AblationResult[],
   slices: SemanticSlice[],
@@ -579,6 +529,12 @@ function buildTechniqueSampleLibrary(
   const boneIndices = new Set(ablationResults.filter((r) => r.category === 'bone').map((r) => r.sliceIndex));
   const highPointIndices = new Set(experienceCurve.filter((c) => c.highPoints).map((c) => c.sliceIndex));
 
+  // 按 sliceIndex 建立消融结果索引，避免位置映射错误
+  const ablationBySliceIndex = new Map<number, AblationResult>();
+  for (const r of ablationResults) {
+    ablationBySliceIndex.set(r.sliceIndex, r);
+  }
+
   return {
     hooks: selectSamples((s) => s.narrativeFunction === 'setup' || s.index <= 3, 3),
     climaxes: selectSamples(
@@ -597,7 +553,7 @@ function buildTechniqueSampleLibrary(
       (s) => s.semanticTags.some((t) => ['世界观', '设定', '揭示'].includes(t)), 3,
     ),
     breathPassages: selectSamples(
-      (s, i) => ablationResults[i]?.category === 'filler_a' || (s.tensionLevel <= 3 && !boneIndices.has(s.index)), 3,
+      (s) => ablationBySliceIndex.get(s.index)?.category === 'filler_a' || (s.tensionLevel <= 3 && !boneIndices.has(s.index)), 3,
     ),
     foreshadowings: selectSamples(
       (s) => s.semanticTags.some((t) => ['伏笔', '铺垫', '暗示'].includes(t)) || s.dependencies.length > 0, 3,

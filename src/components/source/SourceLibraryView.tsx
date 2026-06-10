@@ -9,7 +9,7 @@ import { Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseTxtFile } from '@/lib/file-parser';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
-import { useProjectStore } from '@/lib/store/project';
+import { useNavigationStore } from '@/lib/store/navigation';
 import { SourceNovelCard } from './SourceNovelCard';
 import type { SourceNovel } from '@/types';
 
@@ -17,7 +17,7 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 export function SourceLibraryView() {
   const { sourceNovels, loadSourceNovels, addSourceNovel, setActiveSourceId } = useSourceLibraryStore();
-  const setActiveView = useProjectStore((s) => s.setActiveView);
+  const setActiveView = useNavigationStore((s) => s.setActiveView);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 

@@ -51,6 +51,7 @@ export function sampleByValue(
 ): ValueSamplingResult {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const events = eventGraph.events;
+  const eventById = new Map(events.map((e) => [e.id, e] as const));
   const selected = new Set<number>();
   const byCategory: Record<string, number[]> = {
     climax: [],
@@ -95,8 +96,8 @@ export function sampleByValue(
     .sort((a, b) => b.distance - a.distance);
 
   for (const pair of pairs.slice(0, Math.ceil(foreshadowCount / 2))) {
-    const setupEvent = events.find((e) => e.id === pair.setup);
-    const payoffEvent = events.find((e) => e.id === pair.payoff);
+    const setupEvent = eventById.get(pair.setup);
+    const payoffEvent = eventById.get(pair.payoff);
     for (const e of [setupEvent, payoffEvent]) {
       if (!e) continue;
       const sliceIdx = findSliceIndex(e, slices);
@@ -157,11 +158,13 @@ export function sampleByValue(
   };
 }
 
-/** 从事件找到对应的切片索引 */
+/**
+ * 从事件找到对应的切片索引
+ * 假设 chunk index ≈ slice index（1:1 线性映射），就近搜索匹配角色引用的切片
+ */
 function findSliceIndex(event: NovelEvent, slices: SemanticSlice[]): number {
-  // 通过 chunkIndex 映射：事件所在 chunk 对应切片
-  const ratio = event.chunkIndex / Math.max(1, slices.length);
-  const estimatedSlice = Math.floor(ratio * slices.length);
+  // chunk 索引直接作为 slice 索引的初始估计（假设粒度一致）
+  const estimatedSlice = Math.min(event.chunkIndex, slices.length - 1);
   // 就近搜索带匹配角色引用的切片
   const searchStart = Math.max(0, estimatedSlice - 3);
   const searchEnd = Math.min(slices.length - 1, estimatedSlice + 3);

@@ -42,18 +42,32 @@ export function parseAblationResults(raw: string, slices: SemanticSlice[]): Abla
     const parsed = JSON.parse(jsonMatch[0]);
     if (!Array.isArray(parsed)) return fallbackResults(slices);
 
-    return parsed.map((item: Record<string, unknown>, index: number) => {
-      const category = String(item.category ?? 'uncertain');
-      return {
-        sliceId: slices[index]?.id ?? `unknown-${index}`,
-        sliceIndex: slices[index]?.index ?? index,
-        category: VALID_CATEGORIES.has(category) ? (category as AblationCategory) : 'uncertain',
-        lostIfRemoved: String(item.lostIfRemoved ?? '不确定'),
-        confidence: Math.min(1, Math.max(0, Number(item.confidence ?? 0.3))),
-        reasoning: String(item.reasoning ?? '无法判定'),
-      };
-    });
-  } catch {
+    // 按 sliceId 建立 slices 索引（AI 输出可能乱序）
+    const sliceById = new Map<string, SemanticSlice>();
+    const sliceByIndex = new Map<number, SemanticSlice>();
+    for (const s of slices) {
+      sliceById.set(s.id, s);
+      sliceByIndex.set(s.index, s);
+    }
+
+    return parsed
+      .map((item: Record<string, unknown>) => {
+        const category = String(item.category ?? 'uncertain');
+        // 优先按 sliceId 匹配，回退到 sliceIndex
+        const matchedSlice = (typeof item.sliceId === 'string' && sliceById.get(item.sliceId))
+          || sliceByIndex.get(Number(item.sliceIndex ?? 0));
+        return {
+          sliceId: matchedSlice?.id ?? `unknown-${Number(item.sliceIndex ?? 0)}`,
+          sliceIndex: matchedSlice?.index ?? Number(item.sliceIndex ?? 0),
+          category: VALID_CATEGORIES.has(category) ? (category as AblationCategory) : 'uncertain',
+          lostIfRemoved: String(item.lostIfRemoved ?? '不确定'),
+          confidence: Math.min(1, Math.max(0, Number(item.confidence ?? 0.3))),
+          reasoning: String(item.reasoning ?? '无法判定'),
+        };
+      })
+      .filter((r: AblationResult) => sliceById.has(r.sliceId) || sliceByIndex.has(r.sliceIndex));
+  } catch (err) {
+    console.error('消融测试结果解析失败:', err);
     return fallbackResults(slices);
   }
 }

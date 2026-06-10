@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
+import type { AIConfig } from '@/lib/stream-fetcher';
 
 export interface SettingsState {
   apiKey: string;
@@ -14,6 +15,7 @@ export interface SettingsState {
 
   setAISettings: (settings: Partial<Pick<SettingsState, 'apiKey' | 'model' | 'baseURL' | 'maxContextTokens'>>) => void;
   getEffectiveApiKey: () => string;
+  getAIConfig: () => AIConfig;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -31,6 +33,13 @@ export const useSettingsStore = create<SettingsState>()(
         if (stored.trim()) return stored;
         return process.env.NEXT_PUBLIC_DEEPSEEK_API_KEY ?? '';
       },
+
+      getAIConfig: () => ({
+        apiKey: get().getEffectiveApiKey(),
+        model: get().model,
+        baseURL: get().baseURL,
+        maxContextTokens: get().maxContextTokens,
+      }),
     }),
     {
       name: 'ainovr-settings',

@@ -32,23 +32,38 @@ export function parseExperienceAnnotations(raw: string, slices: SemanticSlice[],
     const parsed = JSON.parse(jsonMatch[0]);
     if (!Array.isArray(parsed)) return [];
 
+    // 按 sliceId 建立 slices 索引（AI 输出可能乱序）
+    const sliceById = new Map<string, SemanticSlice>();
+    const sliceByIndex = new Map<number, SemanticSlice>();
+    for (const s of slices) {
+      sliceById.set(s.id, s);
+      sliceByIndex.set(s.index, s);
+    }
+
     return parsed
       .filter((item: Record<string, unknown>) =>
         typeof item.immersion === 'number' &&
         typeof item.emotional_intensity === 'number' &&
         typeof item.anticipation === 'number')
-      .map((item: Record<string, unknown>, index: number) => ({
-        sliceId: slices[index]?.id ?? `unknown-${index}`,
-        sliceIndex: slices[index]?.index ?? index,
-        immersion: Math.min(10, Math.max(1, Math.round(Number(item.immersion)))),
-        emotionalIntensity: Math.min(10, Math.max(1, Math.round(Number(item.emotional_intensity)))),
-        anticipation: Math.min(10, Math.max(1, Math.round(Number(item.anticipation)))),
-        perceivedPace: (['fast', 'medium', 'slow'].includes(String(item.perceived_pace)) ? String(item.perceived_pace) : 'medium') as 'fast' | 'medium' | 'slow',
-        confidence: Math.min(1, Math.max(0, Number(item.confidence ?? 0.5))),
-        readerPersona: persona,
-        notes: String(item.notes ?? ''),
-      }));
-  } catch {
+      .map((item: Record<string, unknown>) => {
+        // 优先按 sliceId 匹配，回退到位置索引
+        const matchedSlice = (typeof item.sliceId === 'string' && sliceById.get(item.sliceId))
+          || sliceByIndex.get(Number(item.sliceIndex));
+        return {
+          sliceId: matchedSlice?.id ?? `unknown-${Number(item.sliceIndex ?? 0)}`,
+          sliceIndex: matchedSlice?.index ?? Number(item.sliceIndex ?? 0),
+          immersion: Math.min(10, Math.max(1, Math.round(Number(item.immersion)))),
+          emotionalIntensity: Math.min(10, Math.max(1, Math.round(Number(item.emotional_intensity)))),
+          anticipation: Math.min(10, Math.max(1, Math.round(Number(item.anticipation)))),
+          perceivedPace: (['fast', 'medium', 'slow'].includes(String(item.perceived_pace)) ? String(item.perceived_pace) : 'medium') as 'fast' | 'medium' | 'slow',
+          confidence: Math.min(1, Math.max(0, Number(item.confidence ?? 0.5))),
+          readerPersona: persona,
+          notes: String(item.notes ?? ''),
+        };
+      })
+      .filter((ann: ExperienceAnnotation) => sliceById.has(ann.sliceId) || sliceByIndex.has(ann.sliceIndex));
+  } catch (err) {
+    console.error('体验流标注解析失败:', err);
     return [];
   }
 }

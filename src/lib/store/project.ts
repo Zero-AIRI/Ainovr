@@ -5,8 +5,6 @@
 import { create } from 'zustand';
 import type {
   WritingProject,
-  ActiveView,
-  PipelineTask,
   BookOutline,
   Phase,
   Volume,
@@ -20,18 +18,12 @@ export interface ProjectState {
   projects: WritingProject[];
   /** 当前活跃项目 ID */
   activeProjectId: string | null;
-  /** 当前视图 */
-  activeView: ActiveView;
-  /** 当前管线任务 */
-  activeTask: PipelineTask | null;
 
   // 数据加载
   loadProjects: () => Promise<void>;
 
   // 导航
-  setActiveView: (view: ActiveView) => void;
   setActiveProjectId: (id: string | null) => void;
-  setActiveTask: (task: PipelineTask | null) => void;
 
   // 项目 CRUD
   addProject: (project: WritingProject) => void;
@@ -53,8 +45,6 @@ export interface ProjectState {
 export const useProjectStore = create<ProjectState>()((set, get) => ({
   projects: [],
   activeProjectId: null,
-  activeView: 'source-library',
-  activeTask: null,
 
   loadProjects: async () => {
     try {
@@ -67,9 +57,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  setActiveView: (view) => set({ activeView: view }),
   setActiveProjectId: (id) => set({ activeProjectId: id }),
-  setActiveTask: (task) => set({ activeTask: task }),
 
   addProject: (project) => {
     set((state) => ({ projects: [...state.projects, project] }));

@@ -1,5 +1,6 @@
 // ============================================
 // 五层管线编排器 — 先框架后填充
+// 使用 stream-fetcher 统一流式调用
 // ============================================
 
 import type {
@@ -13,43 +14,19 @@ import type {
 } from '@/types';
 import { assembleLayerContext } from './context-assembler';
 import { useSettingsStore } from '@/lib/store/settings';
+import { createStreamFetcher } from '@/lib/stream-fetcher';
 
 /** 获取 AI 设置 */
 function getAISettings() {
-  const s = useSettingsStore.getState();
-  return {
-    apiKey: s.getEffectiveApiKey(),
-    model: s.model,
-    baseURL: s.baseURL,
-    maxContextTokens: s.maxContextTokens,
-  };
+  return useSettingsStore.getState().getAIConfig();
 }
 
-/** 通用流式调用 */
-async function streamGenerate(url: string, body: object): Promise<string | null> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: '请求失败' }));
-    throw new Error(err.error || `${res.status}`);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('无法读取响应流');
-
-  const decoder = new TextDecoder();
-  let fullText = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    fullText += decoder.decode(value, { stream: true });
-  }
-
-  return fullText;
+/** 通用流式调用（使用共享 stream-fetcher） */
+async function streamGenerate(url: string, body: object): Promise<string> {
+  const fetcher = createStreamFetcher();
+  const { result, state } = await fetcher.fetch(url, body);
+  if (!result) throw new Error(state.error || '生成请求失败');
+  return result;
 }
 
 // ============================================
@@ -77,9 +54,6 @@ export async function generateOutline(
   };
 
   const content = await streamGenerate('/api/generation/outline', body);
-  if (!content) throw new Error('大纲生成返回空结果');
-
-  // 通知流式更新
   onStream?.(content);
 
   const outline: BookOutline = {
@@ -117,8 +91,6 @@ export async function generatePhaseFramework(
   };
 
   const result = await streamGenerate('/api/generation/phase-framework', body);
-  if (!result) throw new Error('阶段框架生成返回空结果');
-
   onStream?.(result);
   return result;
 }
@@ -146,8 +118,6 @@ export async function generatePhaseDetail(
   };
 
   const content = await streamGenerate('/api/generation/phase-detail', body);
-  if (!content) throw new Error('阶段详细生成返回空结果');
-
   onStream?.(content);
 
   return {
@@ -155,7 +125,7 @@ export async function generatePhaseDetail(
     index: phaseIndex,
     title: `阶段${phaseIndex + 1}`,
     content,
-    volumeCount: 0, // 框架阶段确定
+    volumeCount: 0,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -173,12 +143,11 @@ export async function generateVolumeFramework(
   const ai = getAISettings();
   const ctx = assembleLayerContext(3, sourceNovels, project);
   const phase = project.phases?.find((p) => p.id === phaseId);
-  const minorPlots = ctx.plotGuide;
 
   const body = {
     outline: project.outline?.content ?? '',
     phaseContent: phase?.content ?? '',
-    minorPlotPatterns: minorPlots,
+    minorPlotPatterns: ctx.plotGuide,
     daoContext: ctx.daoContext,
     rhythmPrescription: ctx.rhythmPrescription,
     apiKey: ai.apiKey,
@@ -187,8 +156,6 @@ export async function generateVolumeFramework(
   };
 
   const result = await streamGenerate('/api/generation/volume-framework', body);
-  if (!result) throw new Error('分卷框架生成返回空结果');
-
   onStream?.(result);
   return result;
 }
@@ -219,8 +186,6 @@ export async function generateVolumeDetail(
   };
 
   const content = await streamGenerate('/api/generation/volume-detail', body);
-  if (!content) throw new Error('分卷详细生成返回空结果');
-
   onStream?.(content);
 
   return {
@@ -259,8 +224,6 @@ export async function generateChapterSetFramework(
   };
 
   const result = await streamGenerate('/api/generation/chapter-set-framework', body);
-  if (!result) throw new Error('章节集合框架生成返回空结果');
-
   onStream?.(result);
   return result;
 }
@@ -290,8 +253,6 @@ export async function generateChapterSetDetail(
   };
 
   const content = await streamGenerate('/api/generation/chapter-set-detail', body);
-  if (!content) throw new Error('章节集合详细生成返回空结果');
-
   onStream?.(content);
 
   return {
@@ -330,8 +291,6 @@ export async function generateChapterPlanFramework(
   };
 
   const result = await streamGenerate('/api/generation/chapter-plan-framework', body);
-  if (!result) throw new Error('每章计划框架生成返回空结果');
-
   onStream?.(result);
   return result;
 }
@@ -361,8 +320,6 @@ export async function generateChapterPlanDetail(
   };
 
   const content = await streamGenerate('/api/generation/chapter-plan-detail', body);
-  if (!content) throw new Error('每章计划详细生成返回空结果');
-
   onStream?.(content);
 
   return {

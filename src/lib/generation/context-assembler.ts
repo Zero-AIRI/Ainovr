@@ -5,6 +5,21 @@
 
 import type { GenerationLayer, SourceNovel, WritingProject, NovelDNA, NovelDao, NovelQi } from '@/types';
 
+// ---- 层级上下文截断常量（近似 token 预算） ----
+
+/** Layer 1 道/气上下文最大字符数（大纲层只需核心信息） */
+const DAO_CONTEXT_MAX_CHARS_L1 = 300;
+/** Layer 2 节奏处方截断字符数 */
+const RHYTHM_MAX_CHARS_L2 = 300;
+/** Layer < 3 风格引擎摘要截断字符数 */
+const STYLE_SUMMARY_MAX_CHARS_EARLY = 500;
+/** 前一章末尾衔接字符数（硬核衔接轨） */
+const PREV_CHAPTER_TAIL_CHARS = 1200;
+/** 前情提要每章取头/尾字符数 */
+const RECENT_CHAPTER_PREVIEW_CHARS = 200;
+/** 前情提要回看章数 */
+const RECENT_CHAPTER_LOOKBACK = 5;
+
 export interface LayerContext {
   /** 文风档案（role='style' 的源小说拼接） */
   styleGuide: string;
@@ -211,17 +226,16 @@ export function assembleLayerContext(
   if (project.chapters.length > 0) {
     // 前一章的末尾 1200 字（硬核衔接轨）
     const lastChapter = project.chapters[project.chapters.length - 1];
-    const lastChapterEnd = lastChapter.content.slice(-1200);
+    const lastChapterEnd = lastChapter.content.slice(-PREV_CHAPTER_TAIL_CHARS);
     previousState = `## 前一章末尾（无缝衔接）\n\n${lastChapterEnd}\n\n`;
 
     // 状态增量轨：前 5 章的关键事件摘要
-    const recentChapters = project.chapters.slice(-5);
+    const recentChapters = project.chapters.slice(-RECENT_CHAPTER_LOOKBACK);
     if (recentChapters.length > 1) {
       previousState += `## 前情提要（最近${recentChapters.length}章关键事件）\n\n`;
       for (const ch of recentChapters.slice(0, -1)) { // 排除最后一章（已传末尾）
-        // 使用前 200 字 + 后 200 字作为粗略摘要
-        const preview = ch.content.slice(0, 200);
-        const tail = ch.content.slice(-200);
+        const preview = ch.content.slice(0, RECENT_CHAPTER_PREVIEW_CHARS);
+        const tail = ch.content.slice(-RECENT_CHAPTER_PREVIEW_CHARS);
         previousState += `- ${preview.replace(/\n/g, ' ')}...${tail.replace(/\n/g, ' ')}\n`;
       }
     }
@@ -247,18 +261,18 @@ export function assembleLayerContext(
 
   // L1 用精简版道/气上下文
   const daoForLayer = layer === 1
-    ? daoContext.slice(0, 300)
+    ? daoContext.slice(0, DAO_CONTEXT_MAX_CHARS_L1)
     : daoContext;
 
   // L5 获得完整的节奏处方
   const rhythmForLayer = layer >= 4
     ? rhythmPrescription
-    : (layer >= 2 ? rhythmPrescription.slice(0, 300) : '');
+    : (layer >= 2 ? rhythmPrescription.slice(0, RHYTHM_MAX_CHARS_L2) : '');
 
   return {
     ...layerContext,
     daoContext: daoForLayer,
     rhythmPrescription: rhythmForLayer,
-    styleEngineSummary: layer >= 3 ? styleEngineSummary : styleEngineSummary.slice(0, 500),
+    styleEngineSummary: layer >= 3 ? styleEngineSummary : styleEngineSummary.slice(0, STYLE_SUMMARY_MAX_CHARS_EARLY),
   };
 }
