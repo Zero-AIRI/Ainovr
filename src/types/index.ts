@@ -432,6 +432,10 @@ export interface SourceNovel {
   // 事件图谱（200万字长篇分析新架构）
   textChunks: TextChunk[] | null;                      // 文本分块索引
   eventGraph: EventGraph | null;                       // 事件图谱
+
+  // 统一管线产出（新架构）
+  generationRulesDna: Record<string, unknown> | null;   // Step 7: 纯量化生成规则 DNA
+  unifiedSummaryReport: Record<string, unknown> | null;  // Step 6: 汇总报告
 }
 
 // ========================================

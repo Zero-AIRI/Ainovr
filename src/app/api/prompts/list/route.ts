@@ -23,6 +23,11 @@ import {
   DEFAULT_CHAPTER_SET_FRAMEWORK, DEFAULT_CHAPTER_SET_DETAIL,
   DEFAULT_CHAPTER_PLAN_FRAMEWORK, DEFAULT_CHAPTER_PLAN_DETAIL,
   DEFAULT_CHAPTER_WRITING, DEFAULT_CHAPTER_REVIEW, DEFAULT_CHAPTER_REVISION,
+  // 统一管线
+  DEFAULT_DEEP_ANALYSIS,
+  DEFAULT_SUMMARY,
+  DEFAULT_DNA_GENERATION,
+  DEFAULT_EVENT_ALIGNMENT,
 } from '@/lib/ai/prompts';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -60,6 +65,11 @@ const DEFAULTS: Record<string, string> = {
   'chapter-writing': DEFAULT_CHAPTER_WRITING,
   'chapter-review': DEFAULT_CHAPTER_REVIEW,
   'chapter-revision': DEFAULT_CHAPTER_REVISION,
+  // 统一管线（7 步）
+  'event-alignment': DEFAULT_EVENT_ALIGNMENT,
+  'deep-analysis': DEFAULT_DEEP_ANALYSIS,
+  'summary': DEFAULT_SUMMARY,
+  'dna-generation': DEFAULT_DNA_GENERATION,
 };
 
 export async function GET() {

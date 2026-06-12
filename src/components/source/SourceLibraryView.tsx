@@ -67,6 +67,8 @@ export function SourceLibraryView() {
           techniqueSamples: null,
           textChunks: null,
           eventGraph: null,
+          generationRulesDna: null,
+          unifiedSummaryReport: null,
         };
 
         const res = await fetch('/api/library/upload', {

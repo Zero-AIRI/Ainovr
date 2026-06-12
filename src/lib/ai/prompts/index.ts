@@ -69,5 +69,17 @@ export { DEFAULT_SYSTEM_PROMPT as DEFAULT_ABLATION_TESTING } from './ablation-te
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_TENSION_TRACKING } from './tension-tracking';
 
 // 事件图谱
-export { buildEventExtractionMessages } from './event-extraction';
+export { buildEventExtractionMessages, buildEventAlignmentMessages } from './event-extraction';
 export { DEFAULT_SYSTEM_PROMPT as DEFAULT_EVENT_EXTRACTION } from './event-extraction';
+export { DEFAULT_ALIGNMENT_PROMPT as DEFAULT_EVENT_ALIGNMENT } from './event-extraction';
+
+// 统一管线 — 公共约束
+export { ENGINEERING_ANALYSIS_CONSTRAINTS, withEngineeringConstraints } from './pipeline-common';
+
+// 统一管线 — Step 5/6/7
+export { buildDeepAnalysisMessages } from './deep-analysis';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_DEEP_ANALYSIS } from './deep-analysis';
+export { buildSummaryMessages } from './summary';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_SUMMARY } from './summary';
+export { buildDnaQualitativeMessages } from './dna-generation';
+export { DEFAULT_SYSTEM_PROMPT as DEFAULT_DNA_GENERATION } from './dna-generation';

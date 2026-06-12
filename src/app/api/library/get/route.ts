@@ -28,12 +28,55 @@ export async function GET(req: NextRequest) {
       rawText = await fs.readFile(path.join(novelDir, 'raw.txt'), 'utf-8');
     } catch { /* raw.txt 可能不存在 */ }
 
-    // 读取 slices.json
+    // 读取 slices.json（旧管线）
     let slices = null;
     try {
       const slicesRaw = await fs.readFile(path.join(novelDir, 'slices.json'), 'utf-8');
       slices = JSON.parse(slicesRaw);
     } catch { /* slices 可能不存在 */ }
+
+    // 读取统一管线中间产物
+    let smallSlices = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'small_slices.json'), 'utf-8');
+      smallSlices = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
+
+    let sliceExtractions = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'slice_extractions.json'), 'utf-8');
+      sliceExtractions = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
+
+    let eventGraph = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'event_graph.json'), 'utf-8');
+      eventGraph = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
+
+    let largeSlices = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'large_slices.json'), 'utf-8');
+      largeSlices = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
+
+    let sliceAnalyses = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'slice_analyses.json'), 'utf-8');
+      sliceAnalyses = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
+
+    let summaryReport = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'summary_report.json'), 'utf-8');
+      summaryReport = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
+
+    let generationRulesDna = null;
+    try {
+      const raw = await fs.readFile(path.join(novelDir, 'generation_rules_dna.json'), 'utf-8');
+      generationRulesDna = JSON.parse(raw);
+    } catch { /* 文件可能不存在 */ }
 
     // 读取 style_profile.md
     let styleProfile: string | null = null;
@@ -89,6 +132,14 @@ export async function GET(req: NextRequest) {
       narrativeConstraints,
       representativeSamples: samples,
       novelDna,
+      // 统一管线中间产物
+      smallSlices,
+      sliceExtractions,
+      eventGraph,
+      largeSlices,
+      sliceAnalyses,
+      summaryReport,
+      generationRulesDna,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '读取源小说失败';

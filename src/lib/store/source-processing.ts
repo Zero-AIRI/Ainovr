@@ -1,18 +1,15 @@
 // ============================================
 // 源小说处理全局 Store — 后台处理，跨页面存活
-// 薄封装：状态管理 + 调用管线函数 + 持久化结果
+// v2: 统一 7 步管线（替代旧 basic + dao 双管线）
 // ============================================
 
 import { create } from 'zustand';
-import { runBasicPipeline, determineResumeStep, TOTAL_STEPS, type BasicPipelineCallbacks } from '@/lib/source-processing/basic-pipeline';
-import { runDaoPipeline } from '@/lib/source-processing/dao-pipeline';
+import { runUnifiedPipeline } from '@/lib/source-processing/unified-pipeline';
+import { TOTAL_PIPELINE_STEPS } from '@/lib/source-processing/pipeline-types';
+import type { PipelineCheckpoint, UnifiedPipelineCallbacks } from '@/lib/source-processing/pipeline-types';
 import { createStreamFetcher, type AIConfig } from '@/lib/stream-fetcher';
 import { useSourceLibraryStore } from './source-library';
 import { useSettingsStore } from './settings';
-import type { ExperienceCurve, AblationResult, TensionAnalysis, NovelDNA, TechniqueSampleLibrary } from '@/types';
-
-/** 道/气管线步骤数 */
-const DAO_TOTAL_STEPS = 4;
 
 function createFilledArray<T>(length: number, value: T): T[] {
   return Array.from({ length }, () => value);
@@ -22,11 +19,11 @@ export interface SourceProcessingState {
   /** 当前正在处理的小说 ID */
   processingNovelId: string | null;
 
-  /** 8 个步骤的流式内容 */
+  /** 7 个步骤的流式内容 */
   streamContents: string[];
-  /** 8 个步骤的流式状态 */
+  /** 7 个步骤的流式状态 */
   isStreaming: boolean[];
-  /** 8 个步骤的错误信息 */
+  /** 7 个步骤的错误信息 */
   streamErrors: (string | null)[];
 
   /** 当前步骤（-1 = idle） */
@@ -44,7 +41,7 @@ export interface SourceProcessingState {
   /** 是否正在运行一键处理 */
   isRunningAll: boolean;
 
-  // ── 道/气管线状态 ──
+  // ── 旧版道/气管线状态（保留兼容） ──
   isRunningDao: boolean;
   daoProgress: number;
   daoCurrentStep: string;
@@ -69,9 +66,9 @@ const streamFetcher = createStreamFetcher();
 
 export const useSourceProcessingStore = create<SourceProcessingState>()((set, get) => ({
   processingNovelId: null,
-  streamContents: createFilledArray(TOTAL_STEPS, ''),
-  isStreaming: createFilledArray(TOTAL_STEPS, false),
-  streamErrors: createFilledArray(TOTAL_STEPS, null),
+  streamContents: createFilledArray(TOTAL_PIPELINE_STEPS, ''),
+  isStreaming: createFilledArray(TOTAL_PIPELINE_STEPS, false),
+  streamErrors: createFilledArray(TOTAL_PIPELINE_STEPS, null),
   currentStep: -1,
   completedSteps: [],
   errorStep: null,
@@ -111,95 +108,65 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
     set({ progress: Math.min(100, Math.max(0, Math.round(progress))) });
   },
 
-  /** 从头开始处理（始终从 Step 0 开始） */
+  /** 从头开始处理 */
   startProcessing: (novelId, rawText, aiConfig) => {
     if (get().isRunningAll) return;
-    runPipelineInternal(novelId, rawText, aiConfig, null, set, get);
+    runUnifiedPipelineInternal(novelId, rawText, aiConfig, null, set, get);
   },
 
-  /** 从断点恢复处理（自动跳过已完成步骤） */
-  resumeProcessing: (novelId) => {
+  /** 从断点恢复处理（加载已保存的中间产物） */
+  resumeProcessing: async (novelId) => {
     if (get().isRunningAll) return;
 
     const aiConfig = useSettingsStore.getState().getAIConfig();
-
     const novel = useSourceLibraryStore.getState().sourceNovels.find((n) => n.id === novelId);
-    const resumeStep = determineResumeStep(novel ?? null);
-    if (resumeStep >= 7 && novel?.status === 'ready') return; // 已完成
 
-    runPipelineInternal(novelId, null, aiConfig, novel ?? null, set, get);
-  },
+    if (novel?.status === 'ready') return;
 
-  /** 道/气深度分析 — 在基础 8 步管线完成后运行 */
-  startDaoAnalysis: (novelId: string) => {
-    if (get().isRunningDao) return;
+    // 从服务端加载已保存的中间产物
+    const completedSteps: number[] = [];
+    let smallSlices: PipelineCheckpoint['smallSlices'] = null;
+    let sliceExtractions: PipelineCheckpoint['sliceExtractions'] = null;
+    let eventGraph: PipelineCheckpoint['eventGraph'] = null;
+    let largeSlices: PipelineCheckpoint['largeSlices'] = null;
+    let sliceAnalyses: PipelineCheckpoint['sliceAnalyses'] = null;
+    let summaryReport: PipelineCheckpoint['summaryReport'] = null;
 
-    const aiConfig = useSettingsStore.getState().getAIConfig();
+    try {
+      const res = await fetch(`/api/library/get?id=${novelId}`);
+      if (res.ok) {
+        const data = await res.json();
 
-    const libraryStore = useSourceLibraryStore.getState();
-    const novel = libraryStore.sourceNovels.find((n) => n.id === novelId);
-    if (!novel || !novel.slices) {
-      set({ daoError: '缺少切片数据，请先完成基础分析' });
-      return;
+        if (data.smallSlices) { smallSlices = data.smallSlices; completedSteps.push(0); }
+        if (data.sliceExtractions) { sliceExtractions = data.sliceExtractions; completedSteps.push(1); }
+        if (data.eventGraph) { eventGraph = data.eventGraph; completedSteps.push(2); }
+        if (data.largeSlices) { largeSlices = data.largeSlices; completedSteps.push(3); }
+        if (data.sliceAnalyses) { sliceAnalyses = data.sliceAnalyses; completedSteps.push(4); }
+        if (data.summaryReport) { summaryReport = data.summaryReport; completedSteps.push(5); }
+        if (data.generationRulesDna) { completedSteps.push(6); }
+      }
+    } catch (err) {
+      console.error('加载断点数据失败，将从头开始:', err);
     }
 
-    set({
-      isRunningDao: true,
-      daoProgress: 0,
-      daoCurrentStep: '准备中...',
-      daoError: null,
-    });
+    const checkpoint: PipelineCheckpoint = {
+      novelId,
+      currentStep: completedSteps.length,
+      completedSteps,
+      smallSlices,
+      largeSlices,
+      sliceExtractions,
+      eventGraph,
+      sliceAnalyses,
+      summaryReport,
+    };
 
-    (async () => {
-      try {
-        const result = await runDaoPipeline(novel, aiConfig, {
-          onStepStart: (_step, message) => {
-            set({ daoCurrentStep: message });
-          },
-          onStepComplete: () => {
-            const stepProgress = Math.round(100 / DAO_TOTAL_STEPS);
-            set({ daoProgress: Math.min(100, get().daoProgress + stepProgress) });
-          },
-          onStepError: (step, error) => {
-            set({ daoError: `${step}: ${error}` });
-          },
-          onProgress: (progress) => {
-            set({ daoProgress: progress });
-          },
-        }, streamFetcher);
+    runUnifiedPipelineInternal(novelId, null, aiConfig, checkpoint, set, get);
+  },
 
-        // 保存结果
-        const updates: Record<string, unknown> = {};
-        if (result.experienceCurve.length > 0) updates.experienceCurve = result.experienceCurve;
-        if (result.ablationResults.length > 0) updates.ablationResults = result.ablationResults;
-        if (result.tensionAnalysis) updates.tensionAnalysis = result.tensionAnalysis;
-        if (result.novelDnaV2) updates.novelDnaV2 = result.novelDnaV2;
-        if (result.techniqueSamples) updates.techniqueSamples = result.techniqueSamples;
-
-        libraryStore.updateSourceNovel(novelId, updates);
-
-        try {
-          const res = await fetch('/api/library/save-step', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: novelId, step: 8, data: updates }),
-          });
-          if (!res.ok) {
-            console.error('保存道/气分析结果失败:', res.status);
-            set({ daoError: `保存失败: HTTP ${res.status}` });
-          }
-        } catch (err) {
-          console.error('保存道/气分析结果失败:', err);
-          set({ daoError: `保存失败: ${err instanceof Error ? err.message : '网络错误'}` });
-        }
-
-        set({ isRunningDao: false, daoProgress: 100, daoCurrentStep: '完成' });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '道/气分析异常';
-        console.error('道/气分析异常:', err);
-        set({ isRunningDao: false, daoError: msg, daoCurrentStep: '失败' });
-      }
-    })();
+  /** 道/气分析 — 统一管线已包含，此方法保留兼容但提示已集成 */
+  startDaoAnalysis: (novelId: string) => {
+    set({ daoError: '道/气分析已集成到统一管线，请使用"一键分析"' });
   },
 
   cancelProcessing: () => {
@@ -212,7 +179,7 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
       processingNovelId: null,
       isRunningAll: false,
       currentStep: -1,
-      isStreaming: createFilledArray(TOTAL_STEPS, false),
+      isStreaming: createFilledArray(TOTAL_PIPELINE_STEPS, false),
       progress: 0,
       errorMessage: null,
       isRunningDao: false,
@@ -226,9 +193,9 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
     streamFetcher.abort();
     set({
       processingNovelId: null,
-      streamContents: createFilledArray(TOTAL_STEPS, ''),
-      isStreaming: createFilledArray(TOTAL_STEPS, false),
-      streamErrors: createFilledArray(TOTAL_STEPS, null),
+      streamContents: createFilledArray(TOTAL_PIPELINE_STEPS, ''),
+      isStreaming: createFilledArray(TOTAL_PIPELINE_STEPS, false),
+      streamErrors: createFilledArray(TOTAL_PIPELINE_STEPS, null),
       currentStep: -1,
       completedSteps: [],
       errorStep: null,
@@ -243,34 +210,34 @@ export const useSourceProcessingStore = create<SourceProcessingState>()((set, ge
   },
 }));
 
-// ---- 内部管线执行 ----
+// ---- 内部统一管线执行 ----
 
-function runPipelineInternal(
+function runUnifiedPipelineInternal(
   novelId: string,
   rawText: string | null,
   aiConfig: AIConfig,
-  novel: import('@/types').SourceNovel | null,
+  checkpoint: PipelineCheckpoint | null,
   set: (partial: Partial<SourceProcessingState> | ((s: SourceProcessingState) => Partial<SourceProcessingState>)) => void,
   get: () => SourceProcessingState,
 ) {
-  const resumeStep = determineResumeStep(novel);
-
   set({
     processingNovelId: novelId,
-    streamContents: createFilledArray(TOTAL_STEPS, ''),
-    isStreaming: createFilledArray(TOTAL_STEPS, false),
-    streamErrors: createFilledArray(TOTAL_STEPS, null),
+    streamContents: createFilledArray(TOTAL_PIPELINE_STEPS, ''),
+    isStreaming: createFilledArray(TOTAL_PIPELINE_STEPS, false),
+    streamErrors: createFilledArray(TOTAL_PIPELINE_STEPS, null),
     currentStep: -1,
-    completedSteps: resumeStep > 0 ? Array.from({ length: resumeStep }, (_, i) => i) : [],
+    completedSteps: [],
     errorStep: null,
     errorMessage: null,
-    progress: Math.round(resumeStep * 100 / TOTAL_STEPS),
+    progress: 0,
     isRunningAll: true,
   });
 
-  const callbacks: BasicPipelineCallbacks = {
-    onStepStart: (step, _message) => {
+  const callbacks: UnifiedPipelineCallbacks = {
+    onStepStart: (step, message) => {
       set({ currentStep: step });
+      get()._updateStreamContent(step, message);
+      get()._updateIsStreaming(step, true);
     },
     onStepComplete: (step) => {
       set((s) => {
@@ -278,12 +245,14 @@ function runPipelineInternal(
         if (!completed.includes(step)) completed.push(step);
         return { completedSteps: completed };
       });
+      get()._updateIsStreaming(step, false);
     },
     onStreamUpdate: (step, content) => {
       get()._updateStreamContent(step, content);
     },
     onStreamError: (step, error) => {
       get()._updateStreamError(step, error);
+      get()._updateIsStreaming(step, false);
     },
     onProgress: (progress) => {
       get()._setProgress(progress);
@@ -298,11 +267,22 @@ function runPipelineInternal(
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
           console.error(`保存步骤 ${step} 失败:`, err);
-          get()._updateStreamError(step, `保存失败: ${err.error || res.status}`);
+        }
+        // 更新源小说状态
+        const updates: Record<string, unknown> = {};
+        if (step === 6 && data.dna) {
+          updates.generationRulesDna = data.dna;
+          updates.status = 'ready';
+          updates.processedAt = new Date().toISOString();
+        }
+        if (step === 5 && data.summaryReport) {
+          updates.unifiedSummaryReport = data.summaryReport;
+        }
+        if (Object.keys(updates).length > 0) {
+          useSourceLibraryStore.getState().updateSourceNovel(novelId, updates);
         }
       } catch (err) {
         console.error(`保存步骤 ${step} 失败:`, err);
-        get()._updateStreamError(step, `保存失败: ${err instanceof Error ? err.message : '网络错误'}`);
       }
     },
     onUpdateNovel: (updates) => {
@@ -312,7 +292,17 @@ function runPipelineInternal(
 
   (async () => {
     try {
-      await runBasicPipeline(novelId, rawText, aiConfig, novel, callbacks, streamFetcher);
+      if (!rawText) {
+        // 恢复模式：需要加载原文
+        const novel = useSourceLibraryStore.getState().sourceNovels.find(n => n.id === novelId);
+        if (!novel) throw new Error('找不到小说数据');
+        const res = await fetch(`/api/library/get?id=${novelId}`);
+        const data = await res.json();
+        rawText = data.rawText;
+        if (!rawText) throw new Error('无法加载原文');
+      }
+
+      await runUnifiedPipeline(novelId, rawText, aiConfig, checkpoint, callbacks, streamFetcher);
       set({ isRunningAll: false, currentStep: -1, progress: 100, processingNovelId: null });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '处理管线异常';

@@ -116,7 +116,7 @@ export async function runWindowedEventExtraction(
 
       // TODO: 重叠区事件引用机制尚未实现，后续可传入前窗口事件 ID 提升合并质量
       const { systemPrompt, userMessage } = buildEventExtractionMessages(
-        chunksText, entityDict, win.id, '',
+        chunksText, win.startChunk, windows.length,
       );
 
       const res = await fetcher.fetch('/api/source/process/event-extraction', {

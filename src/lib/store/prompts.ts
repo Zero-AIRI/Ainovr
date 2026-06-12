@@ -34,7 +34,11 @@ export const PROMPT_REGISTRY: PromptMeta[] = [
   { key: 'experience-annotation', label: '体验流标注', category: '进阶分析', description: '3个读者persona对切片打分（沉浸感/情绪/期待/节奏），聚合体验曲线' },
   { key: 'ablation-testing', label: '消融测试', category: '进阶分析', description: '四分类评估每个切片（骨架/肌肉/体验填充/机械填充），识别核心叙事元素' },
   { key: 'tension-tracking', label: '势能追踪', category: '进阶分析', description: '追踪高潮的积累→释放周期，计算势能模式和节奏画像' },
-  { key: 'event-extraction', label: '事件图谱提取', category: '进阶分析', description: '从文本中提取结构化事件（12类），标注因果链和伏笔关系' },
+  { key: 'event-extraction', label: '事件提取', category: '统一管线', description: '逐小切片提取结构化事件，标注因果链和伏笔（Step 2）' },
+  { key: 'event-alignment', label: '事件对齐', category: '统一管线', description: '代码预处理候选实体对 + AI 对齐跨切片实体，构建全书记忆图谱（Step 3）' },
+  { key: 'deep-analysis', label: '深度分析', category: '统一管线', description: '逐大切片逆向工程 5 维度量化机制（文风/叙事/角色/刺激点/约束）（Step 5）' },
+  { key: 'summary', label: '汇总报告', category: '统一管线', description: '文风演化 + 刺激周期 + 事件功能标注 + 一致性报告 + 信息释放曲线（Step 6）' },
+  { key: 'dna-generation', label: 'DNA 生成规则', category: '统一管线', description: 'AI 补充定性规则（风格签名/核心吸引力/仿写风险），代码填充量化参数（Step 7）' },
   // 层级生成
   { key: 'outline', label: '全书大纲', category: '层级生成', description: '基于大情节框架和创作想法生成 ~200 字大纲' },
   { key: 'phase-framework', label: '阶段框架', category: '层级生成', description: '规划 4-6 个阶段的标题和章节范围' },

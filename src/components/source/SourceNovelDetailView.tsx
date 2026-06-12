@@ -1,5 +1,5 @@
 // ============================================
-// 源小说详情页 — 处理 + 结果查看（8步管线）
+// 源小说详情页 — 处理 + 结果查看（统一 7 步管线）
 // ============================================
 
 'use client';
@@ -15,26 +15,44 @@ import { MarkdownViewer } from './MarkdownViewer';
 import { StreamingText } from '@/components/StreamingText';
 
 const STEPS = [
-  { key: 'slice', label: '智能切片' },
-  { key: 'style', label: '文风画像' },
-  { key: 'narrative', label: '叙事动力学' },
-  { key: 'character', label: '角色动力学' },
-  { key: 'reader', label: '读者体验' },
-  { key: 'constraints', label: '叙事约束' },
-  { key: 'samples', label: '样本选取' },
+  { key: 'small-slice', label: '小切片' },
+  { key: 'event-extract', label: '事件提取' },
+  { key: 'event-align', label: '图谱对齐' },
+  { key: 'large-slice', label: '大切片' },
+  { key: 'deep-analysis', label: '深度分析' },
+  { key: 'summary', label: '汇总报告' },
   { key: 'dna', label: 'DNA 压缩' },
 ];
 
-type AnalysisTab = 'dna' | 'style' | 'narrative' | 'character' | 'reader' | 'constraints';
+// 新管线结果标签
+type AnalysisTab = 'generation-rules-dna' | 'summary-report' | 'event-graph' | 'slice-analyses' | 'legacy-dna' | 'legacy-style' | 'legacy-narrative' | 'legacy-character' | 'legacy-reader' | 'legacy-constraints';
 
-const TABS: { key: AnalysisTab; label: string; field: string }[] = [
-  { key: 'dna', label: '🧬 Novel DNA', field: 'novelDna' },
-  { key: 'style', label: '文风画像', field: 'styleProfile' },
-  { key: 'narrative', label: '叙事动力学', field: 'plotReport' },
-  { key: 'character', label: '角色动力学', field: 'characterDynamics' },
-  { key: 'reader', label: '读者体验', field: 'readerExperience' },
-  { key: 'constraints', label: '叙事约束', field: 'narrativeConstraints' },
+const TABS_NEW: { key: AnalysisTab; label: string; icon?: string }[] = [
+  { key: 'generation-rules-dna', label: '🧬 生成规则 DNA', icon: '🧬' },
+  { key: 'summary-report', label: '📊 汇总报告' },
+  { key: 'event-graph', label: '🔗 事件图谱' },
+  { key: 'slice-analyses', label: '🔬 切片分析' },
 ];
+
+const TABS_LEGACY: { key: AnalysisTab; label: string }[] = [
+  { key: 'legacy-dna', label: '旧 DNA' },
+  { key: 'legacy-style', label: '旧文风' },
+  { key: 'legacy-narrative', label: '旧叙事' },
+  { key: 'legacy-character', label: '旧角色' },
+  { key: 'legacy-reader', label: '旧体验' },
+  { key: 'legacy-constraints', label: '旧约束' },
+];
+
+/** 将 JSON 对象格式化为可读的缩进文本 */
+function formatJson(obj: unknown): string {
+  if (!obj) return '';
+  if (typeof obj === 'string') return obj;
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return String(obj);
+  }
+}
 
 export function SourceNovelDetailView() {
   const { sourceNovels, activeSourceId, setActiveSourceId } = useSourceLibraryStore();
@@ -43,7 +61,7 @@ export function SourceNovelDetailView() {
   const processingStore = useSourceProcessingStore();
 
   const novel = sourceNovels.find((n) => n.id === activeSourceId);
-  const [activeTab, setActiveTab] = useState<AnalysisTab>('dna');
+  const [activeTab, setActiveTab] = useState<AnalysisTab>('generation-rules-dna');
   const [rawText, setRawText] = useState<string | null>(null);
 
   // 判断当前小说是否正在处理
@@ -57,13 +75,18 @@ export function SourceNovelDetailView() {
       .then((res) => res.json())
       .then((data) => {
         setRawText(data.rawText ?? null);
-        const updates: Partial<import('@/types').SourceNovel> = {};
+        const updates: Record<string, unknown> = {};
+        // 旧管线数据（兼容）
         if (data.styleProfile) updates.styleProfile = data.styleProfile;
         if (data.plotReport) updates.plotReport = data.plotReport;
         if (data.characterDynamics) updates.characterDynamics = data.characterDynamics;
         if (data.readerExperience) updates.readerExperience = data.readerExperience;
         if (data.narrativeConstraints) updates.narrativeConstraints = data.narrativeConstraints;
         if (data.novelDna) updates.novelDna = data.novelDna;
+        // 新管线数据
+        if (data.generationRulesDna) updates.generationRulesDna = data.generationRulesDna;
+        if (data.summaryReport) updates.unifiedSummaryReport = data.summaryReport;
+        if (data.eventGraph) updates.eventGraph = data.eventGraph;
         if (data.status) updates.status = data.status;
         if (Object.keys(updates).length > 0) {
           useSourceLibraryStore.getState().updateSourceNovel(activeSourceId, updates);
@@ -118,7 +141,16 @@ export function SourceNovelDetailView() {
 
   const isReady = novel.status === 'ready';
   const isRaw = novel.status === 'raw';
-  const hasAnyResult = !!(novel.styleProfile || novel.plotReport || novel.characterDynamics || novel.readerExperience || novel.narrativeConstraints || novel.novelDna);
+
+  // 检查是否有新管线数据
+  const hasNewDna = !!novel.generationRulesDna;
+  const hasSummaryReport = !!novel.unifiedSummaryReport;
+  const hasEventGraph = !!novel.eventGraph;
+  const hasNewResults = hasNewDna || hasSummaryReport || hasEventGraph;
+
+  // 检查是否有旧管线数据
+  const hasLegacy = !!(novel.styleProfile || novel.plotReport || novel.characterDynamics || novel.readerExperience || novel.narrativeConstraints || novel.novelDna);
+  const hasAnyResult = hasNewResults || hasLegacy;
 
   // 获取当前步骤的流式内容
   const currentStep = processingStore.currentStep;
@@ -126,15 +158,37 @@ export function SourceNovelDetailView() {
     ? processingStore.streamContents[currentStep]
     : '';
 
-  // 获取当前 tab 对应的字段内容
+  // 获取当前 tab 对应的内容
   const getTabContent = (tabKey: AnalysisTab): string | null => {
     switch (tabKey) {
-      case 'dna': return novel.novelDna;
-      case 'style': return novel.styleProfile;
-      case 'narrative': return novel.plotReport;
-      case 'character': return novel.characterDynamics;
-      case 'reader': return novel.readerExperience;
-      case 'constraints': return novel.narrativeConstraints;
+      // 新管线
+      case 'generation-rules-dna': return novel.generationRulesDna ? formatJson(novel.generationRulesDna) : null;
+      case 'summary-report': return novel.unifiedSummaryReport ? formatJson(novel.unifiedSummaryReport) : null;
+      case 'event-graph': return novel.eventGraph ? formatJson(novel.eventGraph) : null;
+      case 'slice-analyses': return null; // sliceAnalyses 在文件中，不在 novel 对象上
+      // 旧管线
+      case 'legacy-dna': return novel.novelDna;
+      case 'legacy-style': return novel.styleProfile;
+      case 'legacy-narrative': return novel.plotReport;
+      case 'legacy-character': return novel.characterDynamics;
+      case 'legacy-reader': return novel.readerExperience;
+      case 'legacy-constraints': return novel.narrativeConstraints;
+    }
+  };
+
+  // 判断 tab 是否有内容
+  const hasTabContent = (tabKey: AnalysisTab): boolean => {
+    switch (tabKey) {
+      case 'generation-rules-dna': return hasNewDna;
+      case 'summary-report': return hasSummaryReport;
+      case 'event-graph': return hasEventGraph;
+      case 'slice-analyses': return false;
+      case 'legacy-dna': return !!novel.novelDna;
+      case 'legacy-style': return !!novel.styleProfile;
+      case 'legacy-narrative': return !!novel.plotReport;
+      case 'legacy-character': return !!novel.characterDynamics;
+      case 'legacy-reader': return !!novel.readerExperience;
+      case 'legacy-constraints': return !!novel.narrativeConstraints;
     }
   };
 
@@ -151,16 +205,16 @@ export function SourceNovelDetailView() {
           </button>
           <h1 className="text-xl font-bold text-foreground">《{novel.title}》</h1>
           <span className="text-xs text-muted-foreground">{novel.totalChars.toLocaleString()} 字</span>
-          {isReady && novel.novelDna && (
+          {(novel.novelDna || novel.generationRulesDna) && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">
               <Dna className="w-3 h-3" />
-              DNA 已提取
+              {hasNewDna ? 'DNA 已提取' : '旧 DNA'}
             </span>
           )}
         </div>
 
         {/* 操作按钮 */}
-        {isReady && (
+        {(isReady || hasAnyResult) && (
           <button
             onClick={handleReanalyze}
             disabled={isAnyProcessing}
@@ -170,7 +224,7 @@ export function SourceNovelDetailView() {
             重新分析
           </button>
         )}
-        {!isReady && (
+        {!isReady && !hasAnyResult && (
           <div className="flex items-center gap-2">
             {isThisProcessing ? (
               <button
@@ -190,7 +244,6 @@ export function SourceNovelDetailView() {
                 一键分析
               </button>
             )}
-            {/* 断点恢复按钮：仅在有部分完成的步骤且当前未在处理时显示 */}
             {!isThisProcessing && processingStore.errorStep !== null && processingStore.completedSteps.length > 0 && (
               <button
                 onClick={() => processingStore.resumeProcessing(novel.id)}
@@ -295,12 +348,12 @@ export function SourceNovelDetailView() {
       )}
 
       {/* 结果标签页 */}
-      {(isReady || hasAnyResult) && (
+      {hasAnyResult && (
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* 标签切换 */}
           <div className="flex gap-1 mb-4 border-b border-border pb-0 overflow-x-auto">
-            {TABS.map((tab) => {
-              const hasContent = !!((novel as unknown as Record<string, unknown>)[tab.field]);
+            {TABS_NEW.map((tab) => {
+              const hasContent = hasTabContent(tab.key);
               return (
                 <button
                   key={tab.key}
@@ -323,6 +376,30 @@ export function SourceNovelDetailView() {
                 </button>
               );
             })}
+            {hasLegacy && (
+              <>
+                <div className="w-px h-6 bg-border self-center mx-1" />
+                {TABS_LEGACY.map((tab) => {
+                  const hasContent = hasTabContent(tab.key);
+                  if (!hasContent) return null;
+                  return (
+                    <button
+                      key={tab.key}
+                      onClick={() => setActiveTab(tab.key)}
+                      className={`
+                        px-3 py-2 text-xs transition-colors relative whitespace-nowrap opacity-60 hover:opacity-100
+                        ${activeTab === tab.key ? 'text-primary opacity-100' : 'text-muted-foreground'}
+                      `}
+                    >
+                      {tab.label}
+                      {activeTab === tab.key && (
+                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+                      )}
+                    </button>
+                  );
+                })}
+              </>
+            )}
           </div>
 
           {/* 内容区 */}
@@ -337,18 +414,18 @@ export function SourceNovelDetailView() {
                 );
               }
 
-              // DNA tab 特殊处理：YAML 用代码块展示
-              if (activeTab === 'dna') {
+              // 新管线 JSON 结构化展示
+              if (activeTab === 'generation-rules-dna' || activeTab === 'summary-report' || activeTab === 'event-graph') {
                 return (
                   <div className="p-4 rounded-lg border border-border bg-card">
-                    <pre className="text-sm font-mono whitespace-pre-wrap break-words text-foreground leading-relaxed">
+                    <pre className="text-sm font-mono whitespace-pre-wrap break-words text-foreground leading-relaxed max-h-[calc(100vh-300px)] overflow-y-auto">
                       {content}
                     </pre>
                   </div>
                 );
               }
 
-              // 其他 tab 用 Markdown 渲染
+              // 旧管线 Markdown 渲染
               return (
                 <div className="p-4 rounded-lg border border-border bg-card">
                   <MarkdownViewer content={content} />
@@ -360,10 +437,10 @@ export function SourceNovelDetailView() {
       )}
 
       {/* 未处理且未在处理中的空状态 */}
-      {isRaw && !isThisProcessing && (
+      {isRaw && !isThisProcessing && !hasAnyResult && (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
           <p className="text-sm mb-1">尚未处理此小说</p>
-          <p className="text-xs opacity-60">点击右上角「一键分析」开始 8 步逆向工程分析</p>
+          <p className="text-xs opacity-60">点击右上角「一键分析」开始 7 步逆向工程分析</p>
         </div>
       )}
     </div>

@@ -4,6 +4,7 @@
 // ============================================
 
 import type { GenerationLayer, SourceNovel, WritingProject, NovelDNA, NovelDao, NovelQi } from '@/types';
+import type { GenerationRulesDNA } from '@/lib/source-processing/pipeline-types';
 
 // ---- 层级上下文截断常量（近似 token 预算） ----
 
@@ -66,7 +67,79 @@ function extractPacingAndForeshadow(plotReport: string): string {
 }
 
 /**
- * 从新 DNA 构建道/气上下文
+ * 从多个新 DNA（GenerationRulesDNA）构建道/气上下文
+ */
+function buildDaoContextFromRules(dnas: GenerationRulesDNA[]): string {
+  return dnas.map((dna, i) => {
+    const parts: string[] = [];
+    if (dnas.length > 1) parts.push(`#### 源小说 ${i + 1}`);
+    if (dna.qualitativeNotes.coreAppeal) {
+      parts.push(`### 核心吸引力\n- ${dna.qualitativeNotes.coreAppeal}`);
+    }
+    parts.push(`### 节奏参数\n- 冲突间隔：${dna.conflictInterval} 字\n- 高潮间隔：${dna.peakInterval} 字\n- 冷却长度：${dna.cooldownLength} 字\n- 刺激循环：${dna.stimulationCycle.join(' → ')}`);
+    parts.push(`### 句式参数\n- 平均句长：${dna.sentenceLength.avg} 字\n- 高潮句长：${dna.sentenceLength.climax} 字\n- 平静句长：${dna.sentenceLength.calm} 字\n- 对话占比：${Math.round(dna.dialogueRatio * 100)}%`);
+    if (dna.settingDriftTolerance > 0) {
+      parts.push(`### 一致性\n- 设定漂移容忍度：${Math.round(dna.settingDriftTolerance * 100)}%\n- 文风一致率：${Math.round(dna.styleConsistencyRate * 100)}%`);
+    }
+    if (dna.qualitativeNotes.styleSignature) {
+      parts.push(`### 风格签名\n- ${dna.qualitativeNotes.styleSignature}`);
+    }
+    return parts.join('\n\n');
+  }).join('\n\n---\n\n');
+}
+
+/**
+ * 从多个新 DNA（GenerationRulesDNA）构建节奏处方
+ */
+function buildRhythmPrescriptionFromRules(dnas: GenerationRulesDNA[]): string {
+  return dnas.map((dna, i) => {
+    const parts: string[] = [];
+    parts.push(dnas.length > 1 ? `## 节奏处方 — 源小说 ${i + 1}\n` : '## 节奏处方（从源小说量化提取）\n');
+    parts.push(`- 冲突间隔：${dna.conflictInterval} 字`);
+    parts.push(`- 高潮间隔：${dna.peakInterval} 字`);
+    parts.push(`- 冷却长度：${dna.cooldownLength} 字`);
+    parts.push(`- 刺激循环模式：${dna.stimulationCycle.join(' → ')}`);
+    if (Object.keys(dna.stimulationDensity).length > 0) {
+      parts.push(`- 刺激类型分布：${Object.entries(dna.stimulationDensity).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join('、')}`);
+    }
+    if (dna.informationRelease.avgSetupToHint > 0) {
+      parts.push(`- 伏笔到提示：${dna.informationRelease.avgSetupToHint} 章`);
+      parts.push(`- 提示到揭秘：${dna.informationRelease.avgHintToReveal} 章`);
+    }
+    if (dna.taboos.length > 0) {
+      parts.push('\n### 禁忌清单');
+      for (const t of dna.taboos) parts.push(`- ❌ ${t}`);
+    }
+    if (dna.qualitativeNotes.riskNotes.length > 0) {
+      parts.push('\n### 仿写风险');
+      for (const r of dna.qualitativeNotes.riskNotes) parts.push(`- ⚠️ ${r}`);
+    }
+    return parts.join('\n');
+  }).join('\n\n---\n\n');
+}
+
+/**
+ * 从多个新 DNA 构建风格引擎摘要
+ */
+function buildStyleSummaryFromRules(dnas: GenerationRulesDNA[]): string {
+  return dnas.map((dna) => {
+    const parts: string[] = [];
+    if (dna.qualitativeNotes.styleSignature) {
+      parts.push(dna.qualitativeNotes.styleSignature);
+    }
+    parts.push(`句长 ${dna.sentenceLength.avg} 字，对话 ${Math.round(dna.dialogueRatio * 100)}%，描写 ${Math.round(dna.descriptionRatio * 100)}%`);
+    if (dna.characterRules.length > 0) {
+      parts.push('\n### 角色规则');
+      for (const c of dna.characterRules.slice(0, 5)) {
+        parts.push(`- ${c.name}：${c.stimulusResponse.map(sr => `${sr.stimulus}→${sr.response}`).join('；')}`);
+      }
+    }
+    return parts.join('\n');
+  }).join('\n\n---\n\n');
+}
+
+/**
+ * 从新 DNA（旧版）构建道/气上下文
  */
 function buildDaoContext(allNovels: SourceNovel[]): string {
   const dnaV2s = allNovels
@@ -185,14 +258,27 @@ export function assembleLayerContext(
   const allSources = [...styleSources, ...plotSources].filter(
     (s, i, arr) => arr.findIndex((x) => x.id === s.id) === i
   );
-  const daoContext = buildDaoContext(allSources);
-  const rhythmPrescription = buildRhythmPrescription(allSources);
+
+  // 优先使用新的 GenerationRulesDNA（收集所有源的 DNA）
+  const newDnas = allSources
+    .map(s => s.generationRulesDna as import('@/lib/source-processing/pipeline-types').GenerationRulesDNA | null)
+    .filter((d): d is import('@/lib/source-processing/pipeline-types').GenerationRulesDNA => d !== null);
+
+  const daoContext = newDnas.length > 0
+    ? buildDaoContextFromRules(newDnas)
+    : buildDaoContext(allSources);
+
+  const rhythmPrescription = newDnas.length > 0
+    ? buildRhythmPrescriptionFromRules(newDnas)
+    : buildRhythmPrescription(allSources);
 
   // 风格引擎摘要
-  const styleEngineSummary = allSources
-    .map((s) => s.novelDnaV2?.styleEngine.rawStyleProfile)
-    .filter(Boolean)
-    .join('\n\n---\n\n');
+  const styleEngineSummary = newDnas.length > 0
+    ? buildStyleSummaryFromRules(newDnas)
+    : allSources
+        .map((s) => s.novelDnaV2?.styleEngine.rawStyleProfile)
+        .filter(Boolean)
+        .join('\n\n---\n\n');
 
   // 层级上下文（当前层以上的内容）
   let hierarchyContext = '';
