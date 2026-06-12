@@ -414,38 +414,43 @@ async function runStep5DeepAnalysis(
 // ============================================
 
 /**
- * 修复截断/损毁的 JSON（AI 流式输出被 max_tokens 截断、SSE 丢帧时常见）。
+ * 修复截断/损毁的 JSON（AI 流式输出语法错误、max_tokens 截断、SSE 丢帧）。
  *
  * 策略（按顺序执行）：
- * 1. `"key":,` → `"key": null,`（值完全缺失）
- * 2. `"key":\n"next"` → `"key": null,\n"next"`（值缺失，下一个 key 开始）
- * 3. `"key":` 行末无值 → `"key": null`
- * 4. `"key" value` → 尝试补冒号（`"key": value`）
- * 5. 闭合未闭合的字符串
- * 6. 补齐缺失的 `}` / `]`
- * 7. 移除末尾不完整的键值对（截断在 key 中间）
+ * 1. 补缺失逗号：`null    "nextKey"` → `null, "nextKey"`
+ * 2. `"key":,` → `"key": null,`（值完全缺失）
+ * 3. `"key":\n"next"` → `"key": null,\n"next"`
+ * 4. `"key":` 行末无值 → `"key": null`
+ * 5. `"key" value` 缺冒号 → 补冒号
+ * 6. 闭合未闭合的字符串
+ * 7. 移除末尾残破行
+ * 8. 移除尾逗号 + 平衡括号
  */
 function repairTruncatedJson(raw: string): string | null {
   let s = raw.trimEnd();
 
-  // --- 1. 修复 `"key":,` → `"key": null,` ---
+  // --- 1. 补缺失逗号：值后缺逗号紧跟下一个 key ---
+  // 例: `null    "avgHintToReveal"` → `null, "avgHintToReveal"`
+  // 例: `"value"  "next"` → `"value", "next"`
+  // 例: `0    "key"` → `0, "key"`
+  // 例: `}    "key"` → `}, "key"`
+  s = s.replace(/(null|true|false|\d+(?:\.\d+)?|"(?:[^"\\]|\\.)*"|[}\]])\s+(")/g, '$1, $2');
+
+  // --- 2. 修复 `"key":,` → `"key": null,` ---
   s = s.replace(/:\s*,/g, ': null,');
 
-  // --- 2. 修复 `"key":` 后直接换行然后下一个 key ---
-  // 例: `"sentenceLengthAvg":\n    "dialogueRatio"` → `"sentenceLengthAvg": null,\n    "dialogueRatio"`
+  // --- 3. 修复 `"key":` 后直接换行然后下一个 key ---
   s = s.replace(/:\s*\n(\s*")/g, ': null,\n$1');
 
-  // --- 3. 修复末尾 `"key":` 无值 ---
+  // --- 4. 修复末尾 `"key":` 无值 ---
   s = s.replace(/:\s*$/m, ': null');
   s = s.replace(/:\s*(\n\s*[}\]]{1,10})/g, ': null$1');
 
-  // --- 4. 修复 `"key" value` 缺冒号（常见截断模式） ---
-  // 例: `"driftRate 0,` → `"driftRate": 0,`
-  // 只在明显是数字/true/false/null 时尝试修复，避免误伤
+  // --- 5. 修复 `"key" value` 缺冒号 ---
   s = s.replace(/"\s+(\d+(?:\.\d+)?)\s*([,\n}])/g, '": $1$2');
   s = s.replace(/"\s+(true|false|null)\s*([,\n}])/g, '": $1$2');
 
-  // --- 5. 闭合未闭合的字符串 ---
+  // --- 6. 闭合未闭合的字符串 ---
   const lines = s.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -456,29 +461,28 @@ function repairTruncatedJson(raw: string): string | null {
   }
   s = lines.join('\n');
 
-  // --- 6. 移除末尾明显残破的行（截断在 key 中间） ---
-  // 例: `"inf` → 删掉这行
+  // --- 7. 移除末尾明显残破的行（截断在 key 中间） ---
   const reLines = s.split('\n');
   const cleaned: string[] = [];
   for (let i = 0; i < reLines.length; i++) {
     const line = reLines[i];
     const trimmed = line.trimEnd();
-    // 以 " 开头但不是完整键值对的行，且在末尾附近 → 可能是截断裂片
     if (trimmed.startsWith('"') && !trimmed.includes(':')) {
-      // 检查是否看起来像截断的 key（后面没有 : value 结构）
       const quoteCount = (trimmed.match(/(?<!\\)"/g) ?? []).length;
-      if (quoteCount === 1 && i >= reLines.length - 3) {
-        // 孤立的引号开头行，末尾几行，很可能截断 → 跳过
-        continue;
-      }
+      if (quoteCount === 1 && i >= reLines.length - 3) continue;
     }
     cleaned.push(line);
   }
   s = cleaned.join('\n');
-  // 移除末尾残留的逗号（JSON 不允许尾逗号）
-  s = s.replace(/,\s*([}\]])\s*$/gm, '$1');
 
-  // --- 7. 平衡括号 ---
+  // --- 7.5 移除末尾截断的键值片段 ---
+  // 例: `, "unfinishedKe` → 剥掉
+  s = s.replace(/,\s*"(?:[^"\\]|\\.)*"\s*$/m, '');
+  // 没引号的残片: `, orphanWord`（至少有一个空白+字符才算残片）
+  s = s.replace(/,\s+\w+\s*$/m, '');
+
+  // --- 8. 移除尾逗号 + 平衡括号 ---
+  s = s.replace(/,\s*([}\]])\s*$/gm, '$1');
   const stripped = s.replace(/"([^"\\]|\\.)*"/g, '""');
   const openBraces = (stripped.match(/\{/g) ?? []).length;
   const closeBraces = (stripped.match(/\}/g) ?? []).length;
