@@ -8,7 +8,7 @@ import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '@/lib/constants';
 interface StreamRouteConfig {
   /** 路由中文标签，用于错误信息 */
   label: string;
-  /** maxTokens，默认 8192 */
+  /** maxTokens，默认 16384 */
   maxTokens?: number;
 }
 
@@ -66,7 +66,7 @@ async function handleStreamRequest(
 
   const stream = chatCompletionStream(
     { apiKey: apiKey as string, model: (model as string) || DEFAULT_MODEL, baseURL: (baseURL as string) || DEFAULT_BASE_URL, thinkingMode },
-    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: config.maxTokens ?? 8192 },
+    { system: systemPrompt, messages: [{ role: 'user', content: userMessage }], maxTokens: config.maxTokens ?? 16384 },
   );
 
   return new Response(stream, {

@@ -55,7 +55,7 @@ export function chatCompletionStream(options: ModelOptions, params: ChatParams):
   const body: Record<string, unknown> = {
     model: options.model,
     messages,
-    max_tokens: params.maxTokens ?? 4096,
+    max_tokens: params.maxTokens ?? 16384,
     stream: true,
   };
 

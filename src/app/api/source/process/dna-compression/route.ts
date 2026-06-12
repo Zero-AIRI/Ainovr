@@ -1,3 +1,3 @@
 import { createStreamRoute } from '@/lib/api/stream-route';
 
-export const POST = createStreamRoute({ label: 'DNA 压缩', maxTokens: 4096 });
+export const POST = createStreamRoute({ label: 'DNA 压缩', maxTokens: 16384 });
