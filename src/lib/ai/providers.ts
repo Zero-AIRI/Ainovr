@@ -99,30 +99,45 @@ export function chatCompletionStream(options: ModelOptions, params: ChatParams):
           return;
         }
 
+        let buffer = '';
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-
-          const text = decoder.decode(value, { stream: true });
-          // 解析 SSE 格式: data: {"choices":[{"delta":{"content":"..."}}]}
-          const lines = text.split('\n');
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const jsonStr = line.slice(6).trim();
-            if (jsonStr === '[DONE]') continue;
-            try {
-              const parsed = JSON.parse(jsonStr);
-              const delta = parsed.choices?.[0]?.delta;
-              if (!delta) continue;
-
-              // 正文内容
-              const content = delta.content;
-              if (content) {
-                controller.enqueue(encoder.encode(content));
-              }
-            } catch {
-              // 跳过解析失败的行
+          if (done) {
+            // 处理 buffer 中可能残留的最后一行
+            if (buffer.trim()) {
+              processLine(buffer.trim());
             }
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          // 解析 SSE 格式: data: {"choices":[{"delta":{"content":"..."}}]}
+          // 保留最后一个可能不完整的行到下次循环
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            processLine(line);
+          }
+        }
+
+        function processLine(line: string) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) return;
+          const jsonStr = trimmed.slice(6).trim();
+          if (jsonStr === '[DONE]') return;
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const delta = parsed.choices?.[0]?.delta;
+            if (!delta) return;
+
+            // 正文内容
+            const content = delta.content;
+            if (content) {
+              controller.enqueue(encoder.encode(content));
+            }
+          } catch {
+            // 跳过解析失败的行（注意：跨 chunk 截断已由 buffer 机制消除）
           }
         }
         controller.close();
