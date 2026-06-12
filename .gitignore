@@ -49,4 +49,4 @@ novel/
 
 # local claude settings (auto-commit hook etc.)
 .claude/settings.local.json
-repomix-output.xml
+# repomix-output.xml
