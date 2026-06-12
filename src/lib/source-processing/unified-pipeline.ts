@@ -450,13 +450,24 @@ function repairTruncatedJson(raw: string): string | null {
   s = s.replace(/"\s+(\d+(?:\.\d+)?)\s*([,\n}])/g, '": $1$2');
   s = s.replace(/"\s+(true|false|null)\s*([,\n}])/g, '": $1$2');
 
+  // --- 5.5 修复缺左引号的 key: `word":` → `"word":` ---
+  // 例: `   unresolvedForeshadowing": 0,` → `   "unresolvedForeshadowing": 0,`
+  // 捕获前导字符 + 空白 + 单词 + ": 避免丢失缩进
+  s = s.replace(/(^|[,\{\[])(\s*)(\w+)":\s*/gm, '$1$2"$3": ');
+
   // --- 6. 闭合未闭合的字符串 ---
+  // 注意：如果奇数引号且包含 `":` 模式，说明是缺左引号，已在 5.5 修复
   const lines = s.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const quoteCount = (line.match(/(?<!\\)"/g) ?? []).length;
     if (quoteCount % 2 !== 0) {
-      lines[i] = line + '"';
+      // 奇数引号：优先尝试在行首补左引号（如果行中有 `word"` 模式）
+      if (/(?<!")\w+":/.test(line)) {
+        lines[i] = line.replace(/(?<!")(\w+":)/, '"$1');
+      } else {
+        lines[i] = line + '"';
+      }
     }
   }
   s = lines.join('\n');
