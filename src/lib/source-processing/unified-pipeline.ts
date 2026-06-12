@@ -414,27 +414,45 @@ async function runStep5DeepAnalysis(
 // ============================================
 
 function parseSummaryReport(raw: string): SummaryReport | null {
-  try {
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    // 注入默认值防止 NaN 流入下游
-    return {
-      styleEvolution: Array.isArray(parsed.styleEvolution) ? parsed.styleEvolution : [],
-      stimulationCycle: parsed.stimulationCycle ?? {
-        avgPeakInterval: 0, avgCooldownLength: 0, cyclePattern: [], stimulationDensity: {},
-      },
-      eventFunctions: Array.isArray(parsed.eventFunctions) ? parsed.eventFunctions : [],
-      consistencyReport: parsed.consistencyReport ?? {
-        settingConflicts: [], unresolvedForeshadowing: 0, totalForeshadowing: 0, driftRate: 0, styleConsistencyRate: 1,
-      },
-      informationRelease: parsed.informationRelease ?? {
-        avgSetupToHint: 0, avgHintToReveal: 0, revealDensity: 0,
-      },
-    };
-  } catch {
-    return null;
+  // 尝试多种 JSON 提取策略
+  const strategies: Array<{ name: string; extract: () => string | null }> = [
+    { name: 'json code block', extract: () => { const m = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/); return m?.[1] ?? null; }},
+    { name: 'first JSON object', extract: () => { const m = raw.match(/\{[\s\S]*?\}(?=\s*(?:\{|\```|$))/); return m?.[0] ?? null; }},
+    { name: 'greedy JSON', extract: () => { const m = raw.match(/\{[\s\S]*\}/); return m?.[0] ?? null; }},
+    { name: 'raw trim', extract: () => raw.trim().startsWith('{') ? raw.trim() : null },
+  ];
+
+  let lastError: string | null = null;
+
+  for (const strategy of strategies) {
+    const candidate = strategy.extract();
+    if (!candidate) continue;
+
+    try {
+      const parsed = JSON.parse(candidate);
+      // 注入默认值防止 NaN 流入下游
+      return {
+        styleEvolution: Array.isArray(parsed.styleEvolution) ? parsed.styleEvolution : [],
+        stimulationCycle: parsed.stimulationCycle ?? {
+          avgPeakInterval: 0, avgCooldownLength: 0, cyclePattern: [], stimulationDensity: {},
+        },
+        eventFunctions: Array.isArray(parsed.eventFunctions) ? parsed.eventFunctions : [],
+        consistencyReport: parsed.consistencyReport ?? {
+          settingConflicts: [], unresolvedForeshadowing: 0, totalForeshadowing: 0, driftRate: 0, styleConsistencyRate: 1,
+        },
+        informationRelease: parsed.informationRelease ?? {
+          avgSetupToHint: 0, avgHintToReveal: 0, revealDensity: 0,
+        },
+      };
+    } catch (e) {
+      lastError = `${strategy.name}: ${e instanceof Error ? e.message : String(e)}`;
+    }
   }
+
+  // 所有策略失败时，记录原始输出的头部便于调试
+  console.error('[parseSummaryReport] 所有解析策略失败:', lastError);
+  console.error('[parseSummaryReport] 原始输出前 500 字符:', raw.slice(0, 500));
+  return null;
 }
 
 async function runStep6Summary(
@@ -460,7 +478,9 @@ async function runStep6Summary(
 
   const report = parseSummaryReport(raw);
   if (!report) {
-    throw new Error('汇总报告解析失败');
+    // 输出原始响应的头部用于调试
+    const preview = raw.slice(0, 300).replace(/\n/g, '↵');
+    throw new Error(`汇总报告解析失败（AI 输出前 300 字符: ${preview}）`);
   }
   return report;
 }

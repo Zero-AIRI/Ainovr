@@ -640,15 +640,10 @@ export interface PipelineTask {
 
 /** 当前激活的视图 */
 export type ActiveView =
-  | 'source-library'       // 素材库管理（含文风/情节库标签页）
+  | 'source-library'       // 素材库管理
   | 'source-detail'        // 单本源小说详情（含处理+结果）
   | 'writing-project'      // 写作项目（含项目设置/层级规划/章节生成标签页）
-  | 'prompt-management'    // 提示词管理
-  | 'source-process'       // [废弃] 旧处理页，迁移完成后移除
-  | 'layer-generation'     // [废弃] 旧层级页，迁移完成后移除
-  | 'chapter-generation'   // [废弃] 旧章节页，迁移完成后移除
-  | 'analyze'              // 旧版兼容
-  | 'write';               // 旧版兼容
+  | 'prompt-management';   // 提示词管理
 
 // ---- 旧版应用状态（Phase 7 后移除） ----
 

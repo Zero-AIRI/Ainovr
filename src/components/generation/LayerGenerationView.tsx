@@ -5,10 +5,8 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { ArrowLeft } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import { useProjectStore } from '@/lib/store/project';
-import { useNavigationStore } from '@/lib/store/navigation';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
@@ -78,7 +76,6 @@ function useMultiStepStream() {
 
 export function LayerGenerationView({ embedded = false }: { embedded?: boolean }) {
   const { projects, activeProjectId, setActiveProjectId, setOutline, setPhases, setVolumes, setChapterSets, setChapterPlans, updateProject } = useProjectStore();
-  const setActiveView = useNavigationStore((s) => s.setActiveView);
   const { sourceNovels } = useSourceLibraryStore();
   const getAIConfig = useSettingsStore((s) => s.getAIConfig);
 
@@ -360,9 +357,6 @@ export function LayerGenerationView({ embedded = false }: { embedded?: boolean }
     <div className="flex-1 flex min-h-0 overflow-hidden">
       {/* 左侧：层级树 */}
       <div className="w-64 border-r border-border overflow-y-auto p-3 shrink-0">
-        {!embedded && (
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">层级结构</h3>
-        )}
         <HierarchyTree
           outline={project.outline}
           phases={project.phases}
@@ -374,18 +368,6 @@ export function LayerGenerationView({ embedded = false }: { embedded?: boolean }
 
       {/* 右侧：逐层操作 */}
       <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
-        {!embedded && (
-          <div className="flex items-center gap-3 mb-4">
-            <button
-              onClick={() => { setActiveProjectId(null); setActiveView('writing-project'); }}
-              className="p-1.5 rounded hover:bg-accent transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <h1 className="text-xl font-bold text-foreground">{project.title}</h1>
-            <span className="text-xs text-muted-foreground">层级 {currentLayer}/5</span>
-          </div>
-        )}
 
         {/* 进度条 */}
         {generatingLayer !== null && (

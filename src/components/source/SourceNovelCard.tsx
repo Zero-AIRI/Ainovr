@@ -37,7 +37,7 @@ function formatChars(n: number): string {
 }
 
 export function SourceNovelCard({ novel, onClick, onRename, onDelete }: SourceNovelCardProps) {
-  const config = STATUS_CONFIG[novel.status];
+  const config = STATUS_CONFIG[novel.status] ?? STATUS_CONFIG['raw'];
   const Icon = config.icon;
   const processingStatuses: SourceNovelStatus[] = ['indexing', 'segmenting', 'slicing', 'extracting', 'character_dynamics', 'deep_analyzing', 'selecting', 'evolution_modeling', 'compressing'];
   const isProcessing = processingStatuses.includes(novel.status);

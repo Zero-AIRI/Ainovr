@@ -13,8 +13,6 @@ import { SourceLibraryView } from '@/components/source/SourceLibraryView';
 import { SourceNovelDetailView } from '@/components/source/SourceNovelDetailView';
 
 import { WritingProjectView } from '@/components/project/WritingProjectView';
-import { LayerGenerationView } from '@/components/generation/LayerGenerationView';
-import { ChapterGenerationView } from '@/components/chapter/ChapterGenerationView';
 import { PromptManagementView } from '@/components/prompts/PromptManagementView';
 
 export default function HomePage() {
@@ -35,8 +33,6 @@ export default function HomePage() {
         {activeView === 'source-detail' && <SourceNovelDetailView />}
         {activeView === 'writing-project' && <WritingProjectView />}
         {activeView === 'prompt-management' && <PromptManagementView />}
-        {activeView === 'layer-generation' && <LayerGenerationView />}
-        {activeView === 'chapter-generation' && <ChapterGenerationView />}
       </main>
     </div>
   );

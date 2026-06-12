@@ -5,9 +5,8 @@
 'use client';
 
 import { useState, useCallback, useMemo } from 'react';
-import { ArrowLeft, Play, Loader2 } from 'lucide-react';
+import { Play, Loader2 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store/project';
-import { useNavigationStore } from '@/lib/store/navigation';
 import { useSourceLibraryStore } from '@/lib/store/source-library';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useStreamingFetch } from '@/lib/hooks/use-streaming-fetch';
@@ -21,7 +20,6 @@ import { nanoid } from 'nanoid';
 
 export function ChapterGenerationView({ embedded = false }: { embedded?: boolean }) {
   const { projects, activeProjectId, addGeneratedChapter, updateGeneratedChapter } = useProjectStore();
-  const setActiveView = useNavigationStore((s) => s.setActiveView);
   const { sourceNovels } = useSourceLibraryStore();
   const getAIConfig = useSettingsStore((s) => s.getAIConfig);
 
@@ -157,14 +155,6 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-6">
         <p className="text-sm">尚未生成章节计划</p>
-        {!embedded && (
-          <button
-            onClick={() => setActiveView('layer-generation')}
-            className="mt-3 px-4 py-2 rounded text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            前往层级规划
-          </button>
-        )}
       </div>
     );
   }
@@ -173,17 +163,7 @@ export function ChapterGenerationView({ embedded = false }: { embedded?: boolean
     <div className="flex-1 flex overflow-hidden">
       {/* 左侧：章节列表 */}
       <div className="w-56 border-r border-border overflow-y-auto p-3">
-        <div className="flex items-center gap-2 mb-3">
-          {!embedded && (
-            <button
-              onClick={() => setActiveView('layer-generation')}
-              className="p-1 rounded hover:bg-accent transition-colors"
-            >
-              <ArrowLeft className="w-3 h-3" />
-            </button>
-          )}
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">章节计划</h3>
-        </div>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">章节计划</h3>
 
         {chapterPlans.map((plan) => {
           const chapter = project.chapters.find((c) => c.chapterPlanId === plan.id);
