@@ -12,6 +12,7 @@ import { useSourceProcessingStore } from '@/lib/store/source-processing';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useNavigationStore } from '@/lib/store/navigation';
 import { MarkdownViewer } from './MarkdownViewer';
+import { AnalysisResultViewer } from './AnalysisResultViewer';
 import { StreamingText } from '@/components/StreamingText';
 
 const STEPS = [
@@ -414,15 +415,15 @@ export function SourceNovelDetailView() {
                 );
               }
 
-              // 新管线 JSON 结构化展示
-              if (activeTab === 'generation-rules-dna' || activeTab === 'summary-report' || activeTab === 'event-graph') {
-                return (
-                  <div className="p-4 rounded-lg border border-border bg-card">
-                    <pre className="text-sm font-mono whitespace-pre-wrap break-words text-foreground leading-relaxed max-h-[calc(100vh-300px)] overflow-y-auto">
-                      {content}
-                    </pre>
-                  </div>
-                );
+              // 新管线 JSON 结构化展示 — 用中文可视化组件
+              if (activeTab === 'generation-rules-dna') {
+                return <AnalysisResultViewer type="dna" data={novel.generationRulesDna} />;
+              }
+              if (activeTab === 'summary-report') {
+                return <AnalysisResultViewer type="summary" data={novel.unifiedSummaryReport} />;
+              }
+              if (activeTab === 'event-graph') {
+                return <AnalysisResultViewer type="event-graph" data={novel.eventGraph} />;
               }
 
               // 旧管线 Markdown 渲染
