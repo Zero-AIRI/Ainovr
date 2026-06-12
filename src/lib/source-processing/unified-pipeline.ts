@@ -414,56 +414,81 @@ async function runStep5DeepAnalysis(
 // ============================================
 
 /**
- * 修复截断的 JSON（AI 输出被 max_tokens 截断时常见）。
+ * 修复截断/损毁的 JSON（AI 流式输出被 max_tokens 截断、SSE 丢帧时常见）。
  *
- * 策略：
- * 1. 补齐末尾残缺值（`"key":` 后无值 → `"key": null`）
- * 2. 闭合未闭合的字符串（末尾 `"value` → `"value"`）
- * 3. 补齐缺失的 `}` / `]`
+ * 策略（按顺序执行）：
+ * 1. `"key":,` → `"key": null,`（值完全缺失）
+ * 2. `"key":\n"next"` → `"key": null,\n"next"`（值缺失，下一个 key 开始）
+ * 3. `"key":` 行末无值 → `"key": null`
+ * 4. `"key" value` → 尝试补冒号（`"key": value`）
+ * 5. 闭合未闭合的字符串
+ * 6. 补齐缺失的 `}` / `]`
+ * 7. 移除末尾不完整的键值对（截断在 key 中间）
  */
 function repairTruncatedJson(raw: string): string | null {
   let s = raw.trimEnd();
 
-  // --- 1. 修复末尾截断的值：`"key":` 后面只有空白/换行，补 null ---
-  // 例如: `"revealDensity":\n  }` → `"revealDensity": null\n  }`
+  // --- 1. 修复 `"key":,` → `"key": null,` ---
+  s = s.replace(/:\s*,/g, ': null,');
+
+  // --- 2. 修复 `"key":` 后直接换行然后下一个 key ---
+  // 例: `"sentenceLengthAvg":\n    "dialogueRatio"` → `"sentenceLengthAvg": null,\n    "dialogueRatio"`
+  s = s.replace(/:\s*\n(\s*")/g, ': null,\n$1');
+
+  // --- 3. 修复末尾 `"key":` 无值 ---
   s = s.replace(/:\s*$/m, ': null');
-  // 例如: `"revealDensity":\n}` → `"revealDensity": null\n}`
   s = s.replace(/:\s*(\n\s*[}\]]{1,10})/g, ': null$1');
 
-  // --- 2. 闭合未闭合的字符串 ---
-  // 行末有奇数个 " → 补一个
+  // --- 4. 修复 `"key" value` 缺冒号（常见截断模式） ---
+  // 例: `"driftRate 0,` → `"driftRate": 0,`
+  // 只在明显是数字/true/false/null 时尝试修复，避免误伤
+  s = s.replace(/"\s+(\d+(?:\.\d+)?)\s*([,\n}])/g, '": $1$2');
+  s = s.replace(/"\s+(true|false|null)\s*([,\n}])/g, '": $1$2');
+
+  // --- 5. 闭合未闭合的字符串 ---
   const lines = s.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const quoteCount = (line.match(/(?<!\\)"/g) ?? []).length;
     if (quoteCount % 2 !== 0) {
-      // 奇数引号 → 末尾补引号闭合
       lines[i] = line + '"';
     }
   }
   s = lines.join('\n');
 
-  // --- 3. 平衡括号（先移除字符串内容避免内部括号干扰） ---
+  // --- 6. 移除末尾明显残破的行（截断在 key 中间） ---
+  // 例: `"inf` → 删掉这行
+  const reLines = s.split('\n');
+  const cleaned: string[] = [];
+  for (let i = 0; i < reLines.length; i++) {
+    const line = reLines[i];
+    const trimmed = line.trimEnd();
+    // 以 " 开头但不是完整键值对的行，且在末尾附近 → 可能是截断裂片
+    if (trimmed.startsWith('"') && !trimmed.includes(':')) {
+      // 检查是否看起来像截断的 key（后面没有 : value 结构）
+      const quoteCount = (trimmed.match(/(?<!\\)"/g) ?? []).length;
+      if (quoteCount === 1 && i >= reLines.length - 3) {
+        // 孤立的引号开头行，末尾几行，很可能截断 → 跳过
+        continue;
+      }
+    }
+    cleaned.push(line);
+  }
+  s = cleaned.join('\n');
+  // 移除末尾残留的逗号（JSON 不允许尾逗号）
+  s = s.replace(/,\s*([}\]])\s*$/gm, '$1');
+
+  // --- 7. 平衡括号 ---
   const stripped = s.replace(/"([^"\\]|\\.)*"/g, '""');
   const openBraces = (stripped.match(/\{/g) ?? []).length;
   const closeBraces = (stripped.match(/\}/g) ?? []).length;
   const openBrackets = (stripped.match(/\[/g) ?? []).length;
   const closeBrackets = (stripped.match(/\]/g) ?? []).length;
-
   const missingBraces = openBraces - closeBraces;
   const missingBrackets = openBrackets - closeBrackets;
-
-  if (missingBraces < 0 || missingBrackets < 0) {
-    // 括号不匹配（多了闭合括号），无法安全修复
-    return null;
-  }
-
-  if (missingBraces > 0) {
-    s += '\n' + '}'.repeat(missingBraces);
-  }
-  if (missingBrackets > 0) {
-    s += '\n' + ']'.repeat(missingBrackets);
-  }
+  if (missingBraces < 0 || missingBrackets < 0) return null;
+  if (missingBraces > 0) s += '\n' + '}'.repeat(missingBraces);
+  if (missingBrackets > 0) s += '\n' + ']'.repeat(missingBrackets);
 
   return s;
 }
