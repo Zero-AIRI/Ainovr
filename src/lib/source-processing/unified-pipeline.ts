@@ -413,6 +413,61 @@ async function runStep5DeepAnalysis(
 // Step 6: 汇总 + 刺激点分析 + 一致性报告
 // ============================================
 
+/**
+ * 修复截断的 JSON（AI 输出被 max_tokens 截断时常见）。
+ *
+ * 策略：
+ * 1. 补齐末尾残缺值（`"key":` 后无值 → `"key": null`）
+ * 2. 闭合未闭合的字符串（末尾 `"value` → `"value"`）
+ * 3. 补齐缺失的 `}` / `]`
+ */
+function repairTruncatedJson(raw: string): string | null {
+  let s = raw.trimEnd();
+
+  // --- 1. 修复末尾截断的值：`"key":` 后面只有空白/换行，补 null ---
+  // 例如: `"revealDensity":\n  }` → `"revealDensity": null\n  }`
+  s = s.replace(/:\s*$/m, ': null');
+  // 例如: `"revealDensity":\n}` → `"revealDensity": null\n}`
+  s = s.replace(/:\s*(\n\s*[}\]]{1,10})/g, ': null$1');
+
+  // --- 2. 闭合未闭合的字符串 ---
+  // 行末有奇数个 " → 补一个
+  const lines = s.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const quoteCount = (line.match(/(?<!\\)"/g) ?? []).length;
+    if (quoteCount % 2 !== 0) {
+      // 奇数引号 → 末尾补引号闭合
+      lines[i] = line + '"';
+    }
+  }
+  s = lines.join('\n');
+
+  // --- 3. 平衡括号（先移除字符串内容避免内部括号干扰） ---
+  const stripped = s.replace(/"([^"\\]|\\.)*"/g, '""');
+  const openBraces = (stripped.match(/\{/g) ?? []).length;
+  const closeBraces = (stripped.match(/\}/g) ?? []).length;
+  const openBrackets = (stripped.match(/\[/g) ?? []).length;
+  const closeBrackets = (stripped.match(/\]/g) ?? []).length;
+
+  const missingBraces = openBraces - closeBraces;
+  const missingBrackets = openBrackets - closeBrackets;
+
+  if (missingBraces < 0 || missingBrackets < 0) {
+    // 括号不匹配（多了闭合括号），无法安全修复
+    return null;
+  }
+
+  if (missingBraces > 0) {
+    s += '\n' + '}'.repeat(missingBraces);
+  }
+  if (missingBrackets > 0) {
+    s += '\n' + ']'.repeat(missingBrackets);
+  }
+
+  return s;
+}
+
 function parseSummaryReport(raw: string): SummaryReport | null {
   // 尝试多种 JSON 提取策略
   const strategies: Array<{ name: string; extract: () => string | null }> = [
@@ -425,27 +480,26 @@ function parseSummaryReport(raw: string): SummaryReport | null {
   let lastError: string | null = null;
 
   for (const strategy of strategies) {
-    const candidate = strategy.extract();
+    let candidate = strategy.extract();
     if (!candidate) continue;
 
+    // 先尝试直接解析
     try {
       const parsed = JSON.parse(candidate);
-      // 注入默认值防止 NaN 流入下游
-      return {
-        styleEvolution: Array.isArray(parsed.styleEvolution) ? parsed.styleEvolution : [],
-        stimulationCycle: parsed.stimulationCycle ?? {
-          avgPeakInterval: 0, avgCooldownLength: 0, cyclePattern: [], stimulationDensity: {},
-        },
-        eventFunctions: Array.isArray(parsed.eventFunctions) ? parsed.eventFunctions : [],
-        consistencyReport: parsed.consistencyReport ?? {
-          settingConflicts: [], unresolvedForeshadowing: 0, totalForeshadowing: 0, driftRate: 0, styleConsistencyRate: 1,
-        },
-        informationRelease: parsed.informationRelease ?? {
-          avgSetupToHint: 0, avgHintToReveal: 0, revealDensity: 0,
-        },
-      };
-    } catch (e) {
-      lastError = `${strategy.name}: ${e instanceof Error ? e.message : String(e)}`;
+      return buildSummaryReport(parsed);
+    } catch {
+      // 直接解析失败，尝试修复截断的 JSON
+    }
+
+    const repaired = repairTruncatedJson(candidate);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired);
+        console.warn('[parseSummaryReport] JSON 被截断，已自动修复');
+        return buildSummaryReport(parsed);
+      } catch (e) {
+        lastError = `${strategy.name}+repair: ${e instanceof Error ? e.message : String(e)}`;
+      }
     }
   }
 
@@ -453,6 +507,38 @@ function parseSummaryReport(raw: string): SummaryReport | null {
   console.error('[parseSummaryReport] 所有解析策略失败:', lastError);
   console.error('[parseSummaryReport] 原始输出前 500 字符:', raw.slice(0, 500));
   return null;
+}
+
+/** 从解析后的 JSON 对象构建 SummaryReport，注入默认值（防止空对象 {} 或 null 流入下游） */
+function buildSummaryReport(parsed: Record<string, unknown>): SummaryReport {
+  const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+  const sc = isObj(parsed.stimulationCycle) ? parsed.stimulationCycle : {};
+  const cr = isObj(parsed.consistencyReport) ? parsed.consistencyReport : {};
+  const ir = isObj(parsed.informationRelease) ? parsed.informationRelease : {};
+
+  return {
+    styleEvolution: Array.isArray(parsed.styleEvolution) ? parsed.styleEvolution : [],
+    stimulationCycle: {
+      avgPeakInterval: Number(sc.avgPeakInterval) || 0,
+      avgCooldownLength: Number(sc.avgCooldownLength) || 0,
+      cyclePattern: Array.isArray(sc.cyclePattern) ? sc.cyclePattern : [],
+      stimulationDensity: isObj(sc.stimulationDensity) ? sc.stimulationDensity as Record<string, number> : {},
+    },
+    eventFunctions: Array.isArray(parsed.eventFunctions) ? parsed.eventFunctions : [],
+    consistencyReport: {
+      settingConflicts: Array.isArray(cr.settingConflicts) ? cr.settingConflicts : [],
+      unresolvedForeshadowing: Number(cr.unresolvedForeshadowing) || 0,
+      totalForeshadowing: Number(cr.totalForeshadowing) || 0,
+      driftRate: Number(cr.driftRate) || 0,
+      styleConsistencyRate: cr.styleConsistencyRate === null || cr.styleConsistencyRate === undefined ? 1 : Number(cr.styleConsistencyRate),
+    },
+    informationRelease: {
+      avgSetupToHint: Number(ir.avgSetupToHint) || 0,
+      avgHintToReveal: Number(ir.avgHintToReveal) || 0,
+      revealDensity: Number(ir.revealDensity) || 0,
+    },
+  };
 }
 
 async function runStep6Summary(
@@ -478,9 +564,29 @@ async function runStep6Summary(
 
   const report = parseSummaryReport(raw);
   if (!report) {
-    // 输出原始响应的头部用于调试
+    // 解析失败但管线不停止：用已有数据构建最小报告的估算值
     const preview = raw.slice(0, 300).replace(/\n/g, '↵');
-    throw new Error(`汇总报告解析失败（AI 输出前 300 字符: ${preview}）`);
+    callbacks.onStreamUpdate(5, `[汇总报告解析失败，使用估算值继续]`);
+    console.warn('[runStep6Summary] 解析失败，使用估算 SummaryReport，原始输出前 300 字符:', preview);
+
+    // 从 sliceAnalyses 估算基本信息
+    const allStimPoints = sliceAnalyses.flatMap(a => a.stimulationPoints);
+    const stimDensity: Record<string, number> = {};
+    for (const p of allStimPoints) {
+      stimDensity[p.type] = (stimDensity[p.type] || 0) + 1;
+    }
+    const totalStim = allStimPoints.length || 1;
+    for (const k of Object.keys(stimDensity)) {
+      stimDensity[k] = Math.round((stimDensity[k] / totalStim) * 100) / 100;
+    }
+
+    return {
+      styleEvolution: [],
+      stimulationCycle: { avgPeakInterval: 0, avgCooldownLength: 0, cyclePattern: [], stimulationDensity: stimDensity },
+      eventFunctions: [],
+      consistencyReport: { settingConflicts: [], unresolvedForeshadowing: 0, totalForeshadowing: 0, driftRate: 0, styleConsistencyRate: 1 },
+      informationRelease: { avgSetupToHint: 0, avgHintToReveal: 0, revealDensity: 0 },
+    };
   }
   return report;
 }
