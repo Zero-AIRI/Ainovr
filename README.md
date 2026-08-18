@@ -1,5 +1,7 @@
 # Ainovr
 
+[![Windows clean-clone gates](https://github.com/Zero-AIRI/Ainovr/actions/workflows/clean-clone-verify.yml/badge.svg?branch=main)](https://github.com/Zero-AIRI/Ainovr/actions/workflows/clean-clone-verify.yml)
+
 Ainovr 是一个面向小说参考分析与原创生产的本地执行环境。它不是内置聊天机器人：Codex、Claude Code、OpenCode 等外部 Agent 负责理解与编排；Ainovr 负责把项目事实、证据、版本、确认、长任务和生产提交可靠地保存下来，并提供可选的桌面工作台。
 
 当前桌面入口固定为“作品 / 参考 / 待处理 / 设置”。它展示线性、可展开的流程与版本证据；自由画布和产品内聊天不是当前产品入口。
@@ -25,16 +27,16 @@ CLI / stdio MCP ─────────────────────�
 ## 技术栈
 
 - TypeScript 5（严格模式）、React 19、Vite 7、Tailwind CSS 4
-- Tauri 2 与 Rust 2021；Rust 侧只负责 sidecar 生命周期和 JSON-RPC 输入边界
+- Tauri 2 与 Rust 1.97.1；Rust 侧只负责 sidecar 生命周期和 JSON-RPC 输入边界
 - Node 侧 `better-sqlite3`
 - Vitest 4 与 ESLint 9
 
-`package.json` 尚未声明 Node `engines` 范围；当前 MCP/CLI 验证环境使用 Node 24。
+Node 固定为 24.14.0（`engines: >=24 <25`），npm 固定为 11.11.1；根目录的 `.node-version` 与 `rust-toolchain.toml` 是本地和 CI 的共同版本来源。
 
 ## 前置条件
 
-- Node.js 与 npm
-- Rust/Tauri 工具链（仅在运行或构建桌面端时需要）
+- Node.js 24.14.0 与 npm 11.11.1
+- Rust 1.97.1（含 `rustfmt`、`clippy`）与 Tauri 工具链（仅在运行或构建桌面端时需要）
 - 可选：Ollama。使用本地 FactExtractor、Writer、Reader、Reviewer 或 Editor 时，需要本机回环服务和已安装模型。
 
 ## 安装与运行
@@ -133,7 +135,7 @@ src/
 ├── lib/analysis/          # 纯分析规则、分段、证据和机制校验
 └── __tests__/             # 单元、契约、应用、持久化和运行时测试
 
-src-tauri/                 # Rust SQLite 网关、Tauri 配置和发布资源
+src-tauri/                 # Rust sidecar 生命周期、Tauri 配置和发布资源
 docs/adr/                  # 架构决策
 docs/rebuild/              # R0–R8 的基线、验证和完成度审计
 ```
@@ -156,3 +158,9 @@ docs/rebuild/              # R0–R8 的基线、验证和完成度审计
 ## 协作规则
 
 详细的架构约束、依赖方向、密钥与来源泄漏红线、命令规范和交付门见 [AGENTS.md](AGENTS.md)。
+
+日常开发、Git 分支、worktree、冲突和恢复流程见 [开发指南](DEVELOPMENT.md)，其他入口见 [文档索引](docs/README.md)。
+
+## 公开源码边界
+
+本仓库是个人公开源码，当前未授予开源许可，也暂不接受外部贡献。请勿假定可以将其代码、数据或发布物用于其他项目；如需授权，请联系仓库所有者。
