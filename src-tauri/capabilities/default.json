@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口仅使用受控的 Application Service 与 Rust 对象网关，不暴露文件、网络、剪贴板或系统打开插件能力",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

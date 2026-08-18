@@ -1,52 +1,59 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+node_modules/
 
-# testing
-/coverage
+# build output
+dist/
+dist-cli/
+dist-ssr/
+dist-mcp/
+build/
+src-tauri/target/
+src-tauri/gen/
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
+# logs
+*.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env / secrets（含旧归档里的 .env.local）
 .env*
-
-# vercel
-.vercel
+archive/legacy-2026-06/.env.local
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
-# local data
+# editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# local runtime data（便携式：开发期数据落这里）
 data/
-novel/
 
 # crash dumps
 *.stackdump
 
-# local claude settings (auto-commit hook etc.)
+# claude local settings
 .claude/settings.local.json
-# repomix-output.xml
+
+# archive 内的 node_modules（如未来误放）
+archive/**/node_modules/
+
+# local project visualization reports
+project-viz-*.html
+
+# local portable release (kept beside gitignored data/)
+/Ainovr.exe
+
+# local handoff helpers and generated source bundle
+/launch-ainovr-hidden.vbs
+/打开 Ainovr.cmd
+/打开 Ainovr.lnk
+/repomix-output.xml
+
+# generated Tauri Node sidecar runtime (rebuilt from npm dependencies)
+/src-tauri/resources/

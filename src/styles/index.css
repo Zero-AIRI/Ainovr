@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+/* 设计 token：极简有质感，纯黑强调色 */
+@theme {
+  /* 背景层 */
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f7f7f7;
+  --color-surface-dim: #f0f0f0;
+
+  /* 边框 */
+  --color-border-default: #e5e5e5;
+  --color-border-focus: #999999;
+
+  /* 文字 */
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #707070;
+  --color-text-tertiary: #a0a0a0;
+
+  /* 强调色：纯黑（极简风格核心——不用蓝色） */
+  --color-accent: #1a1a1a;
+  --color-accent-hover: #333333;
+
+  /* 状态色（低饱和，融入极简） */
+  --color-success: #5a8a5a;
+  --color-warning: #b08040;
+  --color-danger: #b05a5a;
+
+  /* 圆角 */
+  --radius-card: 8px;
+  --radius-input: 6px;
+  --radius-button: 6px;
+
+  /* 阴影：极轻，仅层次区分 */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-lifted: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+  /* 字体 */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  background: var(--color-surface-subtle);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条极简化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-focus);
+}
+
+/* React Flow 极简覆盖 */
+.react-flow__controls {
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius-button);
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+}
+.react-flow__controls-button {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+.react-flow__controls-button:hover {
+  background: var(--color-surface-subtle);
+}
+.react-flow__minimap {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border-default);
+}
+.react-flow__handle {
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--color-surface);
+  background: var(--color-border-focus);
+}
