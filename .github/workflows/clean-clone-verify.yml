@@ -1,0 +1,51 @@
+name: Clean clone verification
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Windows clean-clone gates
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install exact dependencies
+        run: npm ci
+      - name: TypeScript and unit gates
+        run: |
+          npm test
+          npm run typecheck
+          npm run lint
+          npm run build
+          npm run build:cli
+          npm run build:mcp
+      - name: Prepare desktop sidecar
+        run: npm run prepare:desktop-sidecar
+      - name: Rust gateway tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: MCP initialize and tools/list smoke
+        shell: pwsh
+        run: |
+          $requests = @'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"clean-clone-ci","version":"1"}}}
+          {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+          '@
+          $responses = $requests | node dist-mcp/ainovr-mcp.mjs --workspace .
+          if ($responses.Count -ne 2) { throw "MCP did not return initialize and tools/list responses." }
+          if ($responses[0] -notmatch '"protocolVersion"') { throw "MCP initialize response is invalid." }
+          if ($responses[1] -notmatch '"tools"') { throw "MCP tools/list response is invalid." }
+      - name: Desktop release build
+        run: npm run tauri build
