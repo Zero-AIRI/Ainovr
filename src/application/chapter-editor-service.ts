@@ -28,6 +28,8 @@ export interface ChapterEditorDraft extends ChapterReaderDraft {
 export interface ChapterEditorService {
   create(input: {
     command: Omit<CommandEnvelope, "tool" | "args">;
+    /** 任务执行使用 taskId；人工或外部 Agent 直写使用 commandId。 */
+    executionRef: string;
     projectId: string;
     chapterId: string;
     documentId: string;
@@ -88,6 +90,7 @@ export function createChapterEditorService(options: {
   return {
     async create(input) {
       assertId(input.projectId, "projectId");
+      assertId(input.executionRef, "executionRef");
       assertId(input.chapterId, "chapterId");
       assertId(input.documentId, "documentId");
       assertId(input.title, "title");
@@ -129,6 +132,7 @@ export function createChapterEditorService(options: {
             rationale: input.rationale,
             changedRange,
             rawOutputObjectHash: rawOutput.sha256,
+            executionRef: input.executionRef,
           },
           rawOutput,
           contentObject: output,
@@ -186,7 +190,10 @@ function assertTargetedRange(changed: ChapterEditorChangedRange, issues: readonl
   const totalBytes = encoder.encode(sourceText).length;
   if (changed.sourceStartByte === 0 && changed.sourceEndByte === totalBytes) throw new Error("Editor 默认禁止整章重写。 ");
   const covered = issues.some((issue) => changed.sourceStartByte >= issue.startByte && changed.sourceEndByte <= issue.endByte);
-  if (!covered) throw new Error("Editor 改动必须完全落在选定 Reviewer 问题的精确范围内。 ");
+  if (!covered) {
+    const allowed = issues.map((issue) => `[${issue.startByte},${issue.endByte})`).join(", ");
+    throw new Error(`Editor 改动必须完全落在选定 Reviewer 问题的精确范围内（changed=[${changed.sourceStartByte},${changed.sourceEndByte}), allowed=${allowed}）。`);
+  }
 }
 
 async function readEditorDraft(driver: SqlDriver, objects: ObjectStore, documentId: string): Promise<ChapterEditorDraft | null> {
@@ -219,7 +226,7 @@ async function readEditorDraft(driver: SqlDriver, objects: ObjectStore, document
     title: requiredString(payload, "title"),
     text: decoder.decode(await objects.read(row.content_object_hash)),
     model: typeof payload.editorModel === "string" && payload.editorModel.trim() ? payload.editorModel : requiredString(payload, "sourceModel"),
-    taskId: "",
+    executionRef: requiredString(payload, "executionRef"),
     revision,
     parentDocumentId: requiredString(payload, "parentDocumentId"),
     parentRevision,

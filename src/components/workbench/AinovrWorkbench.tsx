@@ -21,6 +21,7 @@ import type { PipelineRunView } from "@/application/pipeline-run-service";
 import type { NovelProjectRecord } from "@/persistence/novel-project-repository";
 import { isTauri } from "@/lib/is-tauri";
 import { createDesktopWorkspaceApplication } from "@/runtime/desktop-workspace-application";
+import { splitDraftAtUtf8Range, type Utf8ByteRange } from "./chapter-draft-anchor";
 import {
   calculateTextDiff,
   compareProviderProfileDraft,
@@ -237,9 +238,12 @@ export function AinovrWorkbench() {
             </button>
           ))}
         </nav>
-        <div className="ml-auto text-xs text-[var(--color-text-tertiary)]">
-          revision {snapshot.workspaceRevision} · change {snapshot.changeSeq}
-        </div>
+        <details className="relative ml-auto text-xs text-[var(--color-text-tertiary)]">
+          <summary className="cursor-pointer select-none">诊断</summary>
+          <div className="absolute right-0 top-5 whitespace-nowrap rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-3 py-2 shadow-sm">
+            workspace r{snapshot.workspaceRevision} · change {snapshot.changeSeq}
+          </div>
+        </details>
       </header>
 
       {error && (
@@ -464,7 +468,7 @@ function WorksPanel({
               >
                 <div>{project.title}</div>
                 <div className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-                  {project.status} · r{project.revision}
+                  {project.status}
                 </div>
               </button>
             ))}
@@ -509,33 +513,24 @@ function WorksPanel({
               <span className="rounded border border-[var(--color-border-default)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]">
                 {selectedProject.status}
               </span>
-              <span className="text-xs text-[var(--color-text-tertiary)]">
-                项目 revision {selectedProject.revision}
-              </span>
             </div>
             <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-              章节、正文、ContextManifest 与评审均经 SQLite 当前 revision 的受控
-              QueryService 显示；页面本身不保留业务副本。
+              在这里选择章节、记录写作方法、阅读草稿并处理 Reviewer 判断；项目事实会自动同步。
             </p>
-            <ProductionPlanningActions
+            <ChapterMethodWorkbenchPanel
               application={application}
               projectId={selectedProject.projectId}
-              documents={documents}
+              chapters={projectWorkbench?.chapters ?? []}
+              productionChains={projectWorkbench?.productionChains ?? []}
               onCommandSucceeded={onCommandSucceeded}
             />
-            <DocumentList
-              documents={documents}
-              selectedDocumentId={selectedDocumentId}
-              onSelectDocument={setSelectedDocumentId}
-            />
-            <DocumentDetail
-              document={selectedDocument}
-              documents={documents}
-              compareDocumentId={compareDocumentId}
-              compareDocument={compareDocument}
-              onCompareDocument={setCompareDocumentId}
-              error={documentError}
-            />
+            <details className="mt-5 rounded border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
+              <summary className="cursor-pointer text-sm font-medium">诊断详情：旧生产链、项目文档与原始索引</summary>
+              <ChapterProductionFlow chains={projectWorkbench?.productionChains ?? []} />
+              <ProductionPlanningActions application={application} projectId={selectedProject.projectId} documents={documents} onCommandSucceeded={onCommandSucceeded} />
+              <DocumentList documents={documents} selectedDocumentId={selectedDocumentId} onSelectDocument={setSelectedDocumentId} />
+              <DocumentDetail document={selectedDocument} documents={documents} compareDocumentId={compareDocumentId} compareDocument={compareDocument} onCompareDocument={setCompareDocumentId} error={documentError} />
+            </details>
           </>
         ) : (
           <EmptyState
@@ -547,18 +542,246 @@ function WorksPanel({
       <ProjectWorkbenchSidebar
         workbench={projectWorkbench}
         error={projectWorkbenchError}
+        hasSelection={Boolean(selectedProjectId)}
       />
     </div>
   );
+}
+
+type MethodDecisionStatus = "specified" | "unknown" | "not_applicable";
+type MethodFieldDraft = { status: MethodDecisionStatus; value: string };
+type MethodWorkbenchProjection = {
+  adoptedMethods: Array<{ id: string; title: string; targetEffect: string; when: string[]; operations: string[]; avoid: string[]; applicability: string[]; revision: number }>;
+  application: ({ revision: number; applicationId: string; mechanismAssetId: string; mechanismRevision: number; chapterContractRevision: number; fields: { reason: MethodFieldDraft; plannedUse: MethodFieldDraft; observableReaderEffect: MethodFieldDraft; misuseToAvoid: MethodFieldDraft; reviewSignals: MethodFieldDraft[] } } | null);
+  review: ({ reviewId: string; revision: number; draftDocumentId: string; effectAssessments: Array<{ signal: MethodFieldDraft; status: string; explanation: string; anchors: Array<{ startByte: number; endByte: number; quote: string }>; sideEffect?: string; suggestedAction: string }> } | null);
+  outcome: ({ revision: number; outcomeId: string; disposition: string; riskAcceptanceReason?: string; decisions: Array<{ signal: MethodFieldDraft; agreement: "agree" | "disagree"; disagreementReason?: string }> } | null);
+  proposal: ({ proposalId: string; revision: number; draftDocumentId: string; productionCommitId: string; outcomeId: string | null; continuity: { canonPatchCount: number; characterKnowledgePatchCount: number; readerPromiseUpdateCount: number; readerState: string; outlineDrift: string } } | null);
+  diagnostics: Array<{ documentId: string; documentType: string; revision: number; stale: boolean }>;
+  blockers: string[];
+  nextAction: string;
+};
+
+/** 作者主路径：以章节选择、自然语言字段与 Reviewer 判断驱动单章单卡闭环。 */
+function ChapterMethodWorkbenchPanel({
+  application, projectId, chapters, productionChains, onCommandSucceeded,
+}: {
+  application: WorkspaceApplicationService | null;
+  projectId: string;
+  chapters: ReadonlyArray<ProjectWorkbenchView["chapters"][number]>;
+  productionChains: ReadonlyArray<ProjectWorkbenchView["productionChains"][number]>;
+  onCommandSucceeded: () => Promise<void>;
+}) {
+  const [chapterId, setChapterId] = useState("");
+  const [view, setView] = useState<MethodWorkbenchProjection | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [methodId, setMethodId] = useState("");
+  const [fields, setFields] = useState<Record<"reason" | "plannedUse" | "observableReaderEffect" | "misuseToAvoid", MethodFieldDraft>>({
+    reason: { status: "specified", value: "" }, plannedUse: { status: "specified", value: "" }, observableReaderEffect: { status: "specified", value: "" }, misuseToAvoid: { status: "specified", value: "" },
+  });
+  const [signals, setSignals] = useState("");
+  const [disposition, setDisposition] = useState("request_revision");
+  const [riskReason, setRiskReason] = useState("");
+  const [disagreements, setDisagreements] = useState<Record<number, string>>({});
+  const [agreements, setAgreements] = useState<Record<number, "agree" | "disagree">>({});
+  const [draftText, setDraftText] = useState<string | null>(null);
+  const [activeAnchor, setActiveAnchor] = useState<Utf8ByteRange | null>(null);
+  const command = () => { const id = `ui:chapter-method:${crypto.randomUUID()}`; return { schemaVersion: 1 as const, commandId: id, idempotencyKey: id, correlationId: id, actor: { kind: "human", id: "tauri-ui" } as const, createdAt: Date.now() }; };
+  const chapterOptions = chapterMethodOptions(chapters, productionChains);
+  const load = useCallback(async (targetChapterId: string) => {
+    if (!application?.chapterMethods || !targetChapterId) return;
+    setLoading(true); setError(null);
+    try {
+      const next = await application.chapterMethods.getWorkbench({ projectId, chapterId: targetChapterId }) as MethodWorkbenchProjection;
+      setView(next); setMethodId(next.application?.mechanismAssetId ?? next.adoptedMethods[0]?.id ?? "");
+      if (next.application) {
+        setFields({ reason: next.application.fields.reason, plannedUse: next.application.fields.plannedUse, observableReaderEffect: next.application.fields.observableReaderEffect, misuseToAvoid: next.application.fields.misuseToAvoid });
+        setSignals(next.application.fields.reviewSignals.map((signal) => signal.value ?? "").filter(Boolean).join("\n"));
+      } else {
+        setFields(emptyMethodFields());
+        setSignals("");
+      }
+      setDisposition(next.outcome?.disposition ?? "request_revision");
+      setRiskReason(next.outcome?.riskAcceptanceReason ?? "");
+      const savedDecisions = new Map((next.outcome?.decisions ?? []).map((decision) => [methodDecisionKey(decision.signal), decision]));
+      const nextAgreements: Record<number, "agree" | "disagree"> = {};
+      const nextDisagreements: Record<number, string> = {};
+      for (const [index, assessment] of (next.review?.effectAssessments ?? []).entries()) {
+        const saved = savedDecisions.get(methodDecisionKey(assessment.signal));
+        if (!saved) continue;
+        nextAgreements[index] = saved.agreement;
+        if (saved.disagreementReason) nextDisagreements[index] = saved.disagreementReason;
+      }
+      setAgreements(nextAgreements); setDisagreements(nextDisagreements); setActiveAnchor(null); setOperationError(null);
+      const draftId = next.review?.draftDocumentId ?? next.diagnostics.find((item) => /chapter_(?:draft|editor)/.test(item.documentId))?.documentId;
+      if (draftId) {
+        const document = await application.queries.getProjectDocument({ projectId, documentId: draftId });
+        setDraftText(document?.content ?? null);
+      } else setDraftText(null);
+    } catch (cause) { setError(messageOf(cause)); }
+    finally { setLoading(false); }
+  }, [application, projectId]);
+  useEffect(() => {
+    const first = chapterOptions[0]?.id ?? "";
+    if (!chapterId && first) setChapterId(first);
+  }, [chapterId, chapterOptions]);
+  useEffect(() => { if (chapterId) void load(chapterId); }, [chapterId, load]);
+  const selectedMethod = view?.adoptedMethods.find((item) => item.id === methodId) ?? null;
+  const saveApplication = async () => {
+    if (!application?.chapterMethods || !view || !selectedMethod) return;
+    setOperationError(null);
+    const contract = view.diagnostics.find((item) => item.documentType === "chapter_contract" && !item.stale);
+    if (!contract) { const message = "当前章节缺少有效章节契约。"; setOperationError(message); toast.error(message); return; }
+    const decision = (field: MethodFieldDraft) => field.status === "specified" ? { status: "specified", value: field.value.trim() } : { status: field.status };
+    const reviewSignals = signals.split("\n").map((line) => line.trim()).filter(Boolean).map((value) => ({ status: "specified", value }));
+    if (Object.values(fields).some((field) => field.status === "specified" && !field.value.trim()) || reviewSignals.length === 0) { const message = "请填写全部决定，或明确选择未知/不适用；Reviewer 至少需要一个检查信号。"; setOperationError(message); toast.error(message); return; }
+    const body = { schema_version: 1, kind: "chapter_mechanism_application", applicationId: `production:chapter_mechanism_application:${chapterId}`, chapterId, chapterContractRevision: contract.revision, mechanismAssetId: selectedMethod.id, mechanismRevision: selectedMethod.revision, fields: { reason: decision(fields.reason), plannedUse: decision(fields.plannedUse), observableReaderEffect: decision(fields.observableReaderEffect), misuseToAvoid: decision(fields.misuseToAvoid), reviewSignals } };
+    try {
+      const result = await application.chapterMethods.saveApplication({ command: command(), projectId, chapterId, expectedRevision: view.application?.revision ?? null, application: body });
+      if (result.kind !== "ok") throw new Error(result.kind === "conflict" || result.kind === "blocked" ? result.diagnostics.map((item) => item.message).join("；") : "本章采用记录未保存。 ");
+      await onCommandSucceeded(); await load(chapterId); toast.success("本章采用记录已保存。 ");
+    } catch (cause) { const message = messageOf(cause); setOperationError(message); toast.error(message); }
+  };
+  const saveOutcome = async () => {
+    if (!application?.chapterMethods || !view?.application || !view.review) return;
+    setOperationError(null);
+    const assessments = view.review.effectAssessments ?? [];
+    const decisions = assessments.map((assessment, index) => ({ signal: assessment.signal, agreement: agreements[index] ?? "agree", ...((agreements[index] ?? "agree") === "disagree" ? { disagreementReason: disagreements[index]?.trim() } : {}) }));
+    if (decisions.some((item) => item.agreement === "disagree" && !item.disagreementReason)) { const message = "不同意 Reviewer 判断时，请写明理由。"; setOperationError(message); toast.error(message); return; }
+    if (disposition === "accept_with_gap" && !riskReason.trim()) { const message = "带风险接受必须填写理由。"; setOperationError(message); toast.error(message); return; }
+    const body = { schema_version: 1, kind: "chapter_mechanism_outcome", outcomeId: `production:chapter_mechanism_outcome:${chapterId}`, chapterId, applicationId: view.application.applicationId, applicationRevision: view.application.revision, reviewId: view.review.reviewId, reviewRevision: view.review.revision, decisions, disposition, ...(disposition === "accept_with_gap" ? { riskAcceptanceReason: riskReason.trim() } : {}), observedSideEffects: assessments.map((item) => item.sideEffect).filter((value): value is string => Boolean(value)) };
+    try {
+      const result = await application.chapterMethods.saveOutcome({ command: command(), projectId, chapterId, expectedRevision: view.outcome?.revision ?? null, outcome: body });
+      if (result.kind !== "ok") throw new Error(result.kind === "conflict" || result.kind === "blocked" ? result.diagnostics.map((item) => item.message).join("；") : "本章应用结果未保存。 ");
+      await onCommandSucceeded(); await load(chapterId); toast.success("本章应用结果已保存。 ");
+    } catch (cause) { const message = messageOf(cause); setOperationError(message); toast.error(message); }
+  };
+  const requestCommit = async () => {
+    if (!application || !view?.proposal || !view?.outcome || (view.outcome.disposition !== "accept_current" && view.outcome.disposition !== "accept_with_gap")) return;
+    setOperationError(null);
+    try {
+      const result = await application.productionActions.requestChapterCommit({ command: command(), projectId, chapterId, proposalId: view.proposal.proposalId });
+      if (result.kind !== "needs_confirmation") throw new Error(result.kind === "blocked" ? result.diagnostics.map((item) => item.message).join("；") : "未能创建正式提交确认。 ");
+      await onCommandSucceeded(); toast.success("已创建正式章节确认；请在待处理页核对后批准。 ");
+    } catch (cause) { const message = messageOf(cause); setOperationError(message); toast.error(message); }
+  };
+  return <section className="mt-5 space-y-4">
+    <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--color-border-default)] pb-4">
+      <div><h2 className="text-lg font-semibold">章节写作方法工作台</h2><p className="mt-1 text-sm text-[var(--color-text-secondary)]">选择章节、记录采用理由，复核目标效果，再决定是否接受为正式章节。</p></div>
+      <label className="text-sm">章节<select value={chapterId} onChange={(event) => setChapterId(event.target.value)} className="ml-2 rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-2 py-1.5"><option value="">选择章节</option>{chapterOptions.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.label}</option>)}</select></label>
+    </div>
+    {loading && <div className="text-sm text-[var(--color-text-tertiary)]">正在读取本章当前事实…</div>}
+    {error && <div className="rounded border border-[var(--color-danger)] p-3 text-sm text-[var(--color-danger)]">章节工作台读取失败：{error}</div>}
+    {operationError && <div className="rounded border border-[var(--color-danger)] p-3 text-sm text-[var(--color-danger)]">本章操作未保存：{operationError}</div>}
+    {!loading && !error && chapterId && view && <>
+      <section className="rounded border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3"><div className="text-sm font-medium">当前阶段</div><div className="mt-1 text-sm text-[var(--color-text-secondary)]">{view.nextAction}</div>{view.blockers.length > 0 && <ul className="mt-2 list-disc pl-5 text-xs text-[var(--color-danger)]">{view.blockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>
+      <div className="grid gap-4 2xl:grid-cols-[15rem_minmax(0,1fr)_20rem]">
+        <aside className="rounded border border-[var(--color-border-default)] p-3"><h3 className="text-sm font-semibold">写作方法</h3>{view.adoptedMethods.length === 0 ? <p className="mt-2 text-sm text-[var(--color-text-tertiary)]">本项目尚无已采纳写作方法卡。</p> : <><select value={methodId} onChange={(event) => setMethodId(event.target.value)} className="mt-3 w-full rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-2 py-1.5 text-sm">{view.adoptedMethods.map((method) => <option key={method.id} value={method.id}>{method.title}</option>)}</select>{selectedMethod && <div className="mt-3 space-y-3 text-xs text-[var(--color-text-secondary)]"><div><div className="font-medium text-[var(--color-text-primary)]">目标效果</div><p className="mt-1">{selectedMethod.targetEffect}</p></div><MethodList label="适用时机" items={selectedMethod.when} /><MethodList label="写作步骤" items={selectedMethod.operations} /><MethodList label="避免事项" items={selectedMethod.avoid} /><MethodList label="适用边界" items={selectedMethod.applicability} /></div>}</>}</aside>
+        <section className="min-w-0 rounded border border-[var(--color-border-default)] p-3"><h3 className="text-sm font-semibold">完整 Writer 草稿</h3>{draftText ? <DraftWithQuoteHighlight text={draftText} activeRange={activeAnchor} /> : <p className="mt-2 text-sm text-[var(--color-text-tertiary)]">当前章节还没有可供复核的 Writer 草稿。</p>}</section>
+        <aside className="rounded border border-[var(--color-border-default)] p-3"><h3 className="text-sm font-semibold">Reviewer 反馈</h3>{view.review ? <div className="mt-3 space-y-3">{view.review.effectAssessments.map((assessment, index) => <div key={`${assessment.signal.value}:${index}`} className="rounded bg-[var(--color-surface-subtle)] p-2 text-xs"><div className="font-medium">{assessment.signal.value || assessment.signal.status} · {humanEffectStatus(assessment.status)}</div><p className="mt-1 text-[var(--color-text-secondary)]">{assessment.explanation}</p>{assessment.anchors.map((anchor) => <button key={`${anchor.startByte}:${anchor.endByte}`} type="button" onClick={() => setActiveAnchor({ startByte: anchor.startByte, endByte: anchor.endByte })} className="mt-1 text-left text-[var(--color-accent)] underline">定位：{anchor.quote}</button>)}<div className="mt-2 flex gap-2"><select value={agreements[index] ?? "agree"} onChange={(event) => setAgreements((current) => ({ ...current, [index]: event.target.value as "agree" | "disagree" }))} className="rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-1 py-1"><option value="agree">同意</option><option value="disagree">不同意</option></select>{(agreements[index] ?? "agree") === "disagree" && <input value={disagreements[index] ?? ""} onChange={(event) => setDisagreements((current) => ({ ...current, [index]: event.target.value }))} placeholder="不同意理由" className="min-w-0 flex-1 rounded border border-[var(--color-border-default)] px-1 py-1" />}</div></div>)}</div> : <p className="mt-2 text-sm text-[var(--color-text-tertiary)]">Reviewer 尚未完成。</p>}</aside>
+      </div>
+      {view.adoptedMethods.length > 0 && <section className="rounded border border-[var(--color-border-default)] p-4"><h3 className="text-base font-semibold">{view.application ? "更新本章采用记录" : "填写本章采用记录"}</h3><p className="mt-1 text-sm text-[var(--color-text-secondary)]">每一项要么填写明确决定，要么明确标注未知或不适用。</p><div className="mt-3 grid gap-3 md:grid-cols-2">{(Object.entries(fields) as Array<[keyof typeof fields, MethodFieldDraft]>).map(([key, field]) => <DecisionField key={key} label={methodFieldLabel(key)} value={field} onChange={(next) => setFields((current) => ({ ...current, [key]: next }))} />)}</div><label className="mt-3 block text-sm">Reviewer 必须检查的信号<textarea value={signals} onChange={(event) => setSignals(event.target.value)} rows={3} placeholder="每行一个，例如：读者会停顿猜测" className="mt-1 w-full rounded border border-[var(--color-border-default)] p-2" /></label><button type="button" onClick={() => void saveApplication()} className="mt-3 rounded bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white">保存本章采用记录</button></section>}
+      {view.application && !view.review && <section className="rounded border border-[var(--color-border-default)] p-4 text-sm text-[var(--color-text-secondary)]">本章采用记录已保存。请由外部 Agent 在已冻结的配方与上下文上完成 Writer、三份 Reader 和 Reviewer；工作台会自动刷新结果。</section>}
+      {view.application && view.review && <section className="rounded border border-[var(--color-border-default)] p-4"><h3 className="text-base font-semibold">记录本章应用结果</h3><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-sm">最终处置<select value={disposition} onChange={(event) => setDisposition(event.target.value)} className="mt-1 block w-full rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] p-2"><option value="accept_current">接受当前版本</option><option value="accept_with_gap">带风险接受</option><option value="request_revision">请求定向修订</option><option value="hold">暂缓</option></select></label>{disposition === "accept_with_gap" && <label className="text-sm">带风险接受理由<input value={riskReason} onChange={(event) => setRiskReason(event.target.value)} className="mt-1 block w-full rounded border border-[var(--color-border-default)] p-2" /></label>}</div><button type="button" onClick={() => void saveOutcome()} className="mt-3 rounded bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white">保存本章应用结果</button>{view.outcome && (view.outcome.disposition === "accept_current" || view.outcome.disposition === "accept_with_gap") && (view.proposal ? <button type="button" onClick={() => void requestCommit()} className="ml-2 rounded border border-[var(--color-border-default)] px-3 py-1.5 text-sm">接受为正式章节</button> : <p className="mt-3 text-sm text-[var(--color-text-secondary)]">本章应用结果已保存；请由外部 Agent 准备正式提交提案和连续性更新后再确认。</p>)}</section>}
+    </>}
+    {!chapterId && <div className="rounded border border-dashed border-[var(--color-border-default)] p-5 text-sm text-[var(--color-text-tertiary)]">先创建并审核 ChapterContract，章节会出现在这里。</div>}
+  </section>;
+}
+
+function DecisionField({ label, value, onChange }: { label: string; value: MethodFieldDraft; onChange: (value: MethodFieldDraft) => void }) {
+  return <label className="text-sm">{label}<div className="mt-1 flex gap-2"><select value={value.status} onChange={(event) => onChange({ status: event.target.value as MethodDecisionStatus, value: "" })} className="rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-2"><option value="specified">明确填写</option><option value="unknown">未知</option><option value="not_applicable">不适用</option></select>{value.status === "specified" && <input value={value.value} onChange={(event) => onChange({ ...value, value: event.target.value })} className="min-w-0 flex-1 rounded border border-[var(--color-border-default)] px-2 py-1.5" />}</div></label>;
+}
+function emptyMethodFields(): Record<"reason" | "plannedUse" | "observableReaderEffect" | "misuseToAvoid", MethodFieldDraft> { return { reason: { status: "specified", value: "" }, plannedUse: { status: "specified", value: "" }, observableReaderEffect: { status: "specified", value: "" }, misuseToAvoid: { status: "specified", value: "" } }; }
+function MethodList({ label, items }: { label: string; items: readonly string[] }) { return <div><div className="font-medium text-[var(--color-text-primary)]">{label}</div><ul className="mt-1 list-disc space-y-1 pl-4">{items.map((item) => <li key={item}>{item}</li>)}</ul></div>; }
+function methodFieldLabel(value: "reason" | "plannedUse" | "observableReaderEffect" | "misuseToAvoid"): string { return value === "reason" ? "本章为什么采用" : value === "plannedUse" ? "准备用在何处" : value === "observableReaderEffect" ? "希望读者有什么反应" : "本章禁止的误用"; }
+function methodDecisionKey(value: MethodFieldDraft): string { return value.status === "specified" ? `specified:${value.value}` : value.status; }
+function humanEffectStatus(value: string): string { return ({ observed: "已观察到", partial: "部分出现", not_observed: "未观察到", counteracted: "被抵消", unknown: "无法判断", not_applicable: "不适用" } as Record<string, string>)[value] ?? value; }
+function chapterMethodOptions(chapters: ReadonlyArray<ProjectWorkbenchView["chapters"][number]>, chains: ReadonlyArray<ProjectWorkbenchView["productionChains"][number]>): Array<{ id: string; label: string }> {
+  const options = new Map(chapters.map((chapter) => [chapter.chapterId, { id: chapter.chapterId, label: chapter.ordinal ? `第 ${chapter.ordinal} 章` : "未编号章节" }]));
+  for (const chain of chains) if (!options.has(chain.chapterId)) options.set(chain.chapterId, { id: chain.chapterId, label: chain.ordinal ? `第 ${chain.ordinal} 章` : "未编号章节" });
+  return [...options.values()].sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+}
+function DraftWithQuoteHighlight({ text, activeRange }: { text: string; activeRange: Utf8ByteRange | null }) {
+  const segments = activeRange ? splitDraftAtUtf8Range(text, activeRange) : null;
+  const highlighted = useRef<HTMLElement | null>(null);
+  useEffect(() => { if (activeRange) highlighted.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, [activeRange]);
+  if (!segments) return <pre className="mt-3 max-h-[38rem] overflow-auto whitespace-pre-wrap break-words font-sans text-sm leading-7">{text}</pre>;
+  return <pre className="mt-3 max-h-[38rem] overflow-auto whitespace-pre-wrap break-words font-sans text-sm leading-7">{segments.before}<mark ref={highlighted} className="bg-amber-200 text-inherit">{segments.highlighted}</mark>{segments.after}</pre>;
+}
+
+/** 固定线性生产链：展示真实 revision、执行引用和阻塞，不提供自由画布或第二份业务状态。 */
+function ChapterProductionFlow({ chains }: { chains: ReadonlyArray<ProjectWorkbenchView["productionChains"][number]> }) {
+  return (
+    <section className="mt-5 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">章节生产链</h2>
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            从契约到正式提交的唯一顺序；节点显示当前 revision、执行、模型、输出与阻塞。
+          </p>
+        </div>
+        <span className="rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-2 py-1 text-[11px] text-[var(--color-text-secondary)]">
+          {chains.length} 个章节流程
+        </span>
+      </div>
+      <div className="mt-4 space-y-3">
+        {chains.map((chain, chainIndex) => (
+          <details key={chain.chapterId} open={chainIndex === 0} className="rounded border border-[var(--color-border-default)] bg-[var(--color-surface)]">
+            <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-medium">
+              {chain.ordinal ? `第 ${chain.ordinal} 章` : "未编号章节"} · {chain.chapterId}
+            </summary>
+            <ol className="border-t border-[var(--color-border-default)] px-3 py-2">
+              {chain.nodes.map((node, index) => (
+                <li key={node.stage} className="relative grid gap-1 border-l border-[var(--color-border-default)] py-2 pl-5 sm:grid-cols-[10rem_7rem_minmax(0,1fr)] sm:items-start sm:gap-3">
+                  <span className={`absolute -left-1.5 top-3 h-3 w-3 rounded-full border-2 border-[var(--color-surface)] ${productionStatusDot(node.status, node.stale)}`} aria-hidden="true" />
+                  <div>
+                    <div className="text-xs font-medium">{index + 1}. {node.label}</div>
+                    <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{node.stage}</div>
+                  </div>
+                  <div className="text-xs">
+                    <span className="rounded border border-[var(--color-border-default)] px-1.5 py-0.5">{node.status}</span>
+                    {node.revision !== null && <span className="ml-1 text-[var(--color-text-tertiary)]">r{node.revision}</span>}
+                  </div>
+                  <div className="min-w-0 text-[11px] text-[var(--color-text-secondary)]">
+                    {node.executionRef && <div className="truncate">执行：{node.executionRef}</div>}
+                    {node.model && <div className="truncate">模型：{node.model}</div>}
+                    {node.outputHash && <div className="truncate font-mono text-[10px]">输出：{node.outputHash.slice(0, 16)}…</div>}
+                    {node.blockingReason && <div className={`mt-0.5 ${node.status === "failed" || node.stale ? "text-[var(--color-danger)]" : "text-[var(--color-text-tertiary)]"}`}>{node.blockingReason}</div>}
+                    {!node.executionRef && !node.model && !node.outputHash && !node.blockingReason && <div className="text-[var(--color-text-tertiary)]">当前节点已具备可用产物。</div>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </details>
+        ))}
+        {chains.length === 0 && (
+          <div className="rounded border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface)] p-4 text-sm text-[var(--color-text-tertiary)]">
+            创建 ChapterContract 后，这里会出现完整章节生产链；未开始的节点也会明确显示前置条件。
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function productionStatusDot(status: string, stale: boolean): string {
+  if (stale || status === "failed") return "bg-[var(--color-danger)]";
+  if (status === "succeeded" || status === "approved" || status === "accepted" || status === "reviewed" || status === "frozen") return "bg-emerald-500";
+  if (status === "running") return "bg-[var(--color-accent)]";
+  if (status === "queued" || status === "waiting_confirmation" || status === "paused") return "bg-amber-500";
+  return "bg-[var(--color-border-strong)]";
 }
 
 /** 作品页右侧只消费 QueryService 的短投影；完整正文、Prompt 与参考侧内容不在此显示。 */
 function ProjectWorkbenchSidebar({
   workbench,
   error,
+  hasSelection,
 }: {
   workbench: ProjectWorkbenchView | null;
   error: string | null;
+  hasSelection: boolean;
 }) {
   if (error)
     return (
@@ -574,7 +797,9 @@ function ProjectWorkbenchSidebar({
         <section className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-[var(--color-surface)] p-4">
           <div className="text-sm font-medium">生产状态</div>
           <div className="mt-2 text-sm text-[var(--color-text-secondary)]">
-            正在读取当前章节、Canon 与 ReaderPromise…
+            {hasSelection
+              ? "正在读取当前章节、Canon 与 ReaderPromise…"
+              : "尚未选择作品；选择或创建作品后，这里会显示生产游标、Canon 与 ReaderPromise。"}
           </div>
         </section>
       </aside>
@@ -589,16 +814,16 @@ function ProjectWorkbenchSidebar({
         <div className="text-sm font-medium">生产状态</div>
         {cursor ? (
           <div className="mt-2 space-y-1 text-sm text-[var(--color-text-secondary)]">
-            <div>
-              当前已接受：第 {cursor.ordinal} 章 · r
-              {cursor.acceptedDocumentRevision}
-            </div>
-            <div className="text-xs text-[var(--color-text-tertiary)]">
-              {cursor.chapterId} · commit {cursor.productionCommitId}
-            </div>
+            <div>当前已接受：第 {cursor.ordinal} 章</div>
             <div className="pt-1">
               下一生产游标：第 {cursor.nextChapterOrdinal} 章
             </div>
+            <details className="text-xs text-[var(--color-text-tertiary)]">
+              <summary className="cursor-pointer">诊断详情</summary>
+              <div className="mt-1 break-words">
+                {cursor.chapterId} · commit {cursor.productionCommitId} · r{cursor.acceptedDocumentRevision}
+              </div>
+            </details>
           </div>
         ) : (
           <div className="mt-2 text-sm text-[var(--color-text-secondary)]">
@@ -617,10 +842,12 @@ function ProjectWorkbenchSidebar({
               key={entry.canonEntryId}
               className="rounded bg-[var(--color-surface-subtle)] p-2 text-xs"
             >
-              <div>{entry.summary ?? entry.canonEntryId}</div>
-              <div className="mt-1 text-[var(--color-text-tertiary)]">
-                {entry.canonEntryId} · r{entry.revision} · {entry.status}
-              </div>
+              <div>{entry.summary ?? "尚未提供 Canon 摘要"}</div>
+              <div className="mt-1 text-[var(--color-text-tertiary)]">{entry.status}</div>
+              <details className="mt-1 text-[var(--color-text-tertiary)]">
+                <summary className="cursor-pointer">诊断详情</summary>
+                <div className="mt-1 break-words">{entry.canonEntryId} · r{entry.revision}</div>
+              </details>
             </div>
           ))}
           {workbench.canonEntries.length === 0 && (
@@ -638,11 +865,12 @@ function ProjectWorkbenchSidebar({
               key={promise.readerPromiseId}
               className="rounded bg-[var(--color-surface-subtle)] p-2 text-xs"
             >
-              <div>{promise.summary ?? promise.readerPromiseId}</div>
-              <div className="mt-1 text-[var(--color-text-tertiary)]">
-                {promise.status} · r{promise.revision}
-                {promise.chapterId ? ` · ${promise.chapterId}` : ""}
-              </div>
+              <div>{promise.summary ?? "尚未提供读者承诺摘要"}</div>
+              <div className="mt-1 text-[var(--color-text-tertiary)]">{promise.status}</div>
+              <details className="mt-1 text-[var(--color-text-tertiary)]">
+                <summary className="cursor-pointer">诊断详情</summary>
+                <div className="mt-1 break-words">{promise.readerPromiseId} · r{promise.revision}{promise.chapterId ? ` · ${promise.chapterId}` : ""}</div>
+              </details>
             </div>
           ))}
           {workbench.readerPromises.length === 0 && (
@@ -1447,7 +1675,7 @@ function AnalysisCorpusStarter({
   };
   return <section className="mt-4 rounded border border-[var(--color-border-default)] p-3">
     <h3 className="text-sm font-medium">启动 V2 分析</h3>
-    <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">冻结完整 SourceEdition 的 AnalysisCorpus；上下文预算取当前默认安全值，后续可由受控 Pipeline 启动 FactExtractor。</p>
+    <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">冻结完整 SourceEdition 的 AnalysisCorpus；提交值会被当前 FactExtractor Provider 与工作区预算共同封顶，并扣除安全余量，后续可由受控 Pipeline 启动 FactExtractor。</p>
     <div className="mt-2 grid gap-2 sm:grid-cols-3">
       <input value={analysisProjectId} onChange={(event) => setAnalysisProjectId(event.target.value)} placeholder="Analysis Project ID" className="rounded border border-[var(--color-border-default)] px-2 py-1 text-sm" />
       <input value={segmentationId} onChange={(event) => setSegmentationId(event.target.value)} placeholder="Segmentation ID" className="rounded border border-[var(--color-border-default)] px-2 py-1 text-sm" />
@@ -1641,6 +1869,11 @@ function PendingPanel({
         toast.error(
           `${result.diagnostics.map((item) => item.message).join("；")} 当前文档已刷新，请在作品页核对新版内容。`,
         );
+        return;
+      }
+      if (result.kind === "needs_confirmation") {
+        await onCommandSucceeded();
+        toast.success("Provider 更新已创建持久化确认；请在“待处理”页核对端点与路由后批准。");
         return;
       }
       if (result.kind !== "ok")
@@ -1899,10 +2132,8 @@ function PendingMechanismReviews({
                   {asset.targetEffect}
                 </div>
               )}
-              <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
-                {asset.mechanismAssetId} · {asset.analysisProjectId} ·{" "}
-                {asset.targetLayers.join(" / ") || "未标注层级"}
-              </div>
+              <div className="mt-3 grid gap-2 text-xs text-[var(--color-text-secondary)] sm:grid-cols-2"><MethodList label="适用时机" items={asset.when} /><MethodList label="写作步骤" items={asset.operations} /><MethodList label="避免事项" items={asset.avoid} /><MethodList label="适用边界" items={asset.applicability} /></div>
+              <details className="mt-3 rounded border border-[var(--color-border-default)] p-2 text-xs"><summary className="cursor-pointer font-medium">展开证据（{asset.evidence.length} 条）</summary><PendingMechanismEvidence application={application} entries={asset.evidence} /></details>
               <label className="mt-3 block text-xs text-[var(--color-text-secondary)]">
                 采纳到原创项目
                 <select
@@ -1960,6 +2191,17 @@ function PendingMechanismReviews({
       </div>
     </section>
   );
+}
+
+function PendingMechanismEvidence({ application, entries }: { application: WorkspaceApplicationService | null; entries: readonly PendingMechanismAssetView["evidence"][number][] }) {
+  const [opened, setOpened] = useState<Record<string, { text: string | null; error: string | null }>>({});
+  const open = async (entry: PendingMechanismAssetView["evidence"][number]) => {
+    if (!application || opened[entry.evidenceInstanceId]) return;
+    try { const excerpt = await application.queries.getEvidenceExcerpt(entry.evidenceInstanceId); setOpened((current) => ({ ...current, [entry.evidenceInstanceId]: { text: excerpt?.text ?? null, error: excerpt ? null : "证据已不可读取。" } })); }
+    catch (cause) { setOpened((current) => ({ ...current, [entry.evidenceInstanceId]: { text: null, error: messageOf(cause) } })); }
+  };
+  if (entries.length === 0) return <p className="mt-2 text-[var(--color-text-tertiary)]">当前候选未关联可展开的合法证据。</p>;
+  return <div className="mt-2 space-y-2">{entries.map((entry) => <div key={entry.evidenceInstanceId} className="rounded bg-[var(--color-surface-subtle)] p-2"><div>正文范围：UTF-8 {entry.startByte}–{entry.endByte}</div><div className="mt-1 break-all font-mono text-[10px] text-[var(--color-text-tertiary)]">source {entry.sourceHash.slice(0, 16)}… · exact {entry.exactTextHash.slice(0, 16)}…</div><button type="button" disabled={!application} onClick={() => void open(entry)} className="mt-2 rounded border border-[var(--color-border-default)] px-2 py-1 disabled:opacity-40">读取定位摘录</button>{opened[entry.evidenceInstanceId]?.error && <div className="mt-2 text-[var(--color-danger)]">{opened[entry.evidenceInstanceId].error}</div>}{opened[entry.evidenceInstanceId]?.text && <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-sans text-xs">{opened[entry.evidenceInstanceId].text}</pre>}</div>)}</div>;
 }
 
 function CoverageGaps({ gaps }: { gaps: readonly CoverageGapView[] }) {
@@ -2085,7 +2327,11 @@ function SettingsPanel({
   const [providerId, setProviderId] = useState("");
   const [name, setName] = useState("");
   const [baseURL, setBaseURL] = useState("http://localhost:11434/v1");
+  const [protocol, setProtocol] = useState<ProviderProfileView["protocol"]>("chat_completions");
   const [defaultModel, setDefaultModel] = useState("");
+  const [providerContextWindow, setProviderContextWindow] = useState("4096");
+  const [providerMaxOutput, setProviderMaxOutput] = useState("1024");
+  const [providerSafetyMargin, setProviderSafetyMargin] = useState("0.2");
   const [routeDraft, setRouteDraft] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [conflictingDraft, setConflictingDraft] = useState<{
@@ -2114,7 +2360,11 @@ function SettingsPanel({
     setProviderId(selected.providerProfileId);
     setName(selected.name);
     setBaseURL(selected.baseURL);
+    setProtocol(selected.protocol);
     setDefaultModel(selected.defaultModel);
+    setProviderContextWindow(String(selected.contextWindowTokens));
+    setProviderMaxOutput(String(selected.maxOutputTokens));
+    setProviderSafetyMargin(String(selected.safetyMarginRatio));
     setRouteDraft(
       selected.routes.map((route) => `${route.role}=${route.model}`).join("\n"),
     );
@@ -2126,7 +2376,11 @@ function SettingsPanel({
     setProviderId("");
     setName("");
     setBaseURL("http://localhost:11434/v1");
+    setProtocol("chat_completions");
     setDefaultModel("");
+    setProviderContextWindow("4096");
+    setProviderMaxOutput("1024");
+    setProviderSafetyMargin("0.2");
     setRouteDraft("");
   };
   const save = async () => {
@@ -2137,7 +2391,11 @@ function SettingsPanel({
         providerId: providerId.trim(),
         name: name.trim(),
         baseURL: baseURL.trim(),
+        protocol,
         defaultModel: defaultModel.trim(),
+        contextWindowTokens: Number(providerContextWindow),
+        maxOutputTokens: Number(providerMaxOutput),
+        safetyMarginRatio: Number(providerSafetyMargin),
         routes,
       };
       const requestId = `ui:provider-profile:${crypto.randomUUID()}`;
@@ -2154,8 +2412,12 @@ function SettingsPanel({
           providerProfileId: providerId.trim(),
           name: name.trim(),
           baseURL: baseURL.trim(),
+          protocol,
           defaultModel: defaultModel.trim(),
           routes,
+          contextWindowTokens: Number(providerContextWindow),
+          maxOutputTokens: Number(providerMaxOutput),
+          safetyMarginRatio: Number(providerSafetyMargin),
         },
         createdAt: Date.now(),
       });
@@ -2286,6 +2548,15 @@ function SettingsPanel({
             />
           </label>
           <label className="block">
+            协议
+            <select value={protocol} onChange={(event) => setProtocol(event.target.value as ProviderProfileView["protocol"])} className="mt-1 block w-full rounded border border-[var(--color-border-default)] bg-[var(--color-surface)] px-2 py-1.5">
+              <option value="ollama_native">Ollama 原生（仅本机）</option>
+              <option value="chat_completions">OpenAI Chat Completions</option>
+              <option value="responses">OpenAI Responses</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-[var(--color-text-tertiary)]">本地回环只支持 Ollama 原生或 Chat Completions；Responses 仅用于 HTTPS 远程 Provider。</span>
+          </label>
+          <label className="block">
             默认模型
             <input
               value={defaultModel}
@@ -2293,6 +2564,11 @@ function SettingsPanel({
               className="mt-1 w-full rounded border border-[var(--color-border-default)] px-2 py-1.5"
             />
           </label>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label>上下文窗口<input type="number" min="1024" value={providerContextWindow} onChange={(event) => setProviderContextWindow(event.target.value)} className="mt-1 w-full rounded border border-[var(--color-border-default)] px-2 py-1.5" /></label>
+            <label>最大输出<input type="number" min="256" value={providerMaxOutput} onChange={(event) => setProviderMaxOutput(event.target.value)} className="mt-1 w-full rounded border border-[var(--color-border-default)] px-2 py-1.5" /></label>
+            <label>安全余量<input type="number" step="0.05" min="0" max="0.95" value={providerSafetyMargin} onChange={(event) => setProviderSafetyMargin(event.target.value)} className="mt-1 w-full rounded border border-[var(--color-border-default)] px-2 py-1.5" /></label>
+          </div>
           <label className="block">
             角色路由（每行：角色=模型）
             <textarea
@@ -2324,6 +2600,11 @@ function SettingsPanel({
             自动化默认 supervised；DataPolicy
             与高风险命令仍将经同一确认体系处理。
           </p>
+          {selected && (
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              更新已有 Provider 会创建持久化确认：批准时会重新核对 revision；这是为了防止运行时 Secret 被改送到未核对的端点。
+            </p>
+          )}
         </div>
       </section>
       <WorkspaceSettingsEditor
@@ -2566,6 +2847,11 @@ function PipelineRevisionEditor({
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
               {run.runId}
             </div>
+            {Object.keys(run.routeSnapshots).length > 0 && (
+              <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                已冻结路由：{Object.entries(run.routeSnapshots).map(([role, route]) => `${role}=${route?.model ?? "?"}`).join(" · ")}
+              </div>
+            )}
             {run.nodes.map((node) => {
               const key = `${run.runId}:${node.stepId}`;
               return (
@@ -2577,16 +2863,21 @@ function PipelineRevisionEditor({
                     <span className="font-medium">{node.stepId}</span> ·{" "}
                     {node.tool} · {node.status}
                   </div>
+                  <div className="mt-1 text-[var(--color-text-tertiary)]">
+                    执行分类：{node.execution}{node.dependsOn.length > 0 ? ` · 前置：${node.dependsOn.join("、")}` : ""}
+                  </div>
                   {node.status === "pending" && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={!application || executing[key]}
-                        onClick={() => void executeNode(run.runId, node.stepId)}
-                        className="rounded border border-[var(--color-border-default)] px-2 py-1 disabled:opacity-40"
-                      >
-                        {executing[key] ? "正在启动…" : "执行受支持步骤"}
-                      </button>
+                      {node.execution === "executable" && node.dependsOn.every((dependency) => run.nodes.find((item) => item.stepId === dependency)?.status === "completed") && (
+                        <button
+                          type="button"
+                          disabled={!application || executing[key]}
+                          onClick={() => void executeNode(run.runId, node.stepId)}
+                          className="rounded border border-[var(--color-border-default)] px-2 py-1 disabled:opacity-40"
+                        >
+                          {executing[key] ? "正在启动…" : "执行受支持步骤"}
+                        </button>
+                      )}
                       <input
                         value={runNotes[key] ?? ""}
                         onChange={(event) =>
@@ -2600,10 +2891,11 @@ function PipelineRevisionEditor({
                       />
                       <button
                         type="button"
+                        disabled={node.dependsOn.some((dependency) => run.nodes.find((item) => item.stepId === dependency)?.status !== "completed")}
                         onClick={() =>
                           void completeNode(run.runId, node.stepId)
                         }
-                        className="rounded border border-[var(--color-border-default)] px-2 py-1"
+                        className="rounded border border-[var(--color-border-default)] px-2 py-1 disabled:opacity-40"
                       >
                         记录完成
                       </button>
@@ -2833,6 +3125,9 @@ function WorkspaceSettingsEditor({
           />
         </label>
       </div>
+      <p className="mt-3 text-xs text-[var(--color-text-tertiary)]">
+        Provider 能力预算描述模型实际上限；工作区预算是本项目策略上限。分析与生产的有效预算取两者共同约束，并扣除安全余量，不会因为修改工作区设置而超过 Provider 能力。
+      </p>
       <button
         type="button"
         disabled={!application || isSaving}

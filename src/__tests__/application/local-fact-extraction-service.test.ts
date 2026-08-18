@@ -30,7 +30,7 @@ describe("本地 FactExtractor 任务", () => {
 
   it("将单元原文只写入对象化 prompt，通过 TaskRunner 调用本地模型并原子提交事实与成功状态", async () => {
     const { service, facts, unitId, caller } = await prepare([
-      JSON.stringify({ facts: [{ id: "event_001", kind: "event", rawLabel: null, statement: "门后传来脚步声", subject: null, object: null, evidenceSpanIds: ["sp00002"], epistemicStatus: "observed" }] }),
+      JSON.stringify({ facts: [{ id: "event_001", kind: "event", rawLabel: null, statement: "门后传来脚步声", subject: null, object: null, evidenceSpanIds: ["segmentation_001:sp00002"], epistemicStatus: "observed" }] }),
     ]);
     await expect(service.start({
       command: command("start_001"), taskId: "fact_task_001", analysisProjectId: "analysis_001", analysisUnitId: unitId,
@@ -43,11 +43,11 @@ describe("本地 FactExtractor 任务", () => {
     expect(request.systemPrompt).toContain("可观察事实");
     expect(request.systemPrompt).toContain("不得猜测作者意图");
     expect(request.prompt).toContain("kind 为 other 时才填写 rawLabel");
-    expect(request.prompt).toContain("sp00002");
+    expect(request.prompt).toContain("segmentation_001:sp00002");
     expect(request.prompt).toContain("门后有脚步声");
     expect(request.prompt).toContain("最多 16 条");
     await expect(facts.getFactLedger("analysis_001", unitId)).resolves.toEqual([
-      expect.objectContaining({ id: "event_001", evidenceSpanIds: ["sp00002"] }),
+      expect.objectContaining({ id: "event_001", evidenceSpanIds: ["segmentation_001:sp00002"] }),
     ]);
     await expect(driver.query<{ args_json: string }>({ sql: "SELECT args_json FROM commands WHERE tool = 'start_local_fact_extraction'", params: [] }))
       .resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ args_json: expect.stringContaining("门后有脚步声") })]));
@@ -76,7 +76,7 @@ describe("本地 FactExtractor 任务", () => {
   });
 
   it("结构化本地输出因长度截断时，以更高输出预算进行唯一一次受控修复", async () => {
-    const valid = JSON.stringify({ facts: [{ id: "event_length_001", kind: "event", rawLabel: null, statement: "门后有脚步声", subject: null, object: null, evidenceSpanIds: ["sp00002"], epistemicStatus: "observed" }] });
+    const valid = JSON.stringify({ facts: [{ id: "event_length_001", kind: "event", rawLabel: null, statement: "门后有脚步声", subject: null, object: null, evidenceSpanIds: ["segmentation_001:sp00002"], epistemicStatus: "observed" }] });
     const { service, unitId, caller } = await prepare([valid]);
     caller.complete.mockImplementationOnce(async () => ({ text: "{\"facts\":[", finishReason: "length" }));
     await service.start({ command: command("start_length"), taskId: "fact_task_length", analysisProjectId: "analysis_001", analysisUnitId: unitId, baseURL: "http://localhost:11434/v1", model: "qwen3:8b", maxTokens: 1024 });
@@ -89,7 +89,7 @@ describe("本地 FactExtractor 任务", () => {
   });
 
   it("失败任务可经新命令重配置本地模型和输出预算，再使用原 taskId 安全恢复", async () => {
-    const valid = JSON.stringify({ facts: [{ id: "event_reconfigured_001", kind: "event", rawLabel: null, statement: "门后有脚步声", subject: null, object: null, evidenceSpanIds: ["sp00002"], epistemicStatus: "observed" }] });
+    const valid = JSON.stringify({ facts: [{ id: "event_reconfigured_001", kind: "event", rawLabel: null, statement: "门后有脚步声", subject: null, object: null, evidenceSpanIds: ["segmentation_001:sp00002"], epistemicStatus: "observed" }] });
     const { service, unitId, caller } = await prepare(["不是 JSON", "仍然不是 JSON", valid]);
     await service.start({ command: command("start_reconfigure"), taskId: "fact_task_reconfigure", analysisProjectId: "analysis_001", analysisUnitId: unitId, baseURL: "http://localhost:11434/v1", model: "qwen3.5:9b", maxTokens: 1024 });
     await expect(service.run("fact_task_reconfigure")).rejects.toThrow(/JSON/);

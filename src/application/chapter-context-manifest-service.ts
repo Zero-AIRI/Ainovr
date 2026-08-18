@@ -3,6 +3,7 @@ import type { CommandService } from "@/application/command-service";
 import type { ObjectStore } from "@/persistence/object-store";
 import type { SqlDriver } from "@/persistence/sql-driver";
 import { planningDocumentId } from "@/application/planning-document-id";
+import type { ModelResolver } from "@/application/model-resolver";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -33,6 +34,8 @@ export interface WriterContextManifest {
   conversationHistory: [];
   tokenBudget: number;
   reservedOutputTokens: number;
+  modelContextWindowTokens: number;
+  modelMaxOutputTokens: number;
   tokenEstimate: number;
   layers: WriterContextLayer[];
 }
@@ -58,6 +61,7 @@ export function createChapterContextManifestService(options: {
   driver: SqlDriver;
   commands: CommandService;
   objects: ObjectStore;
+  modelResolver?: ModelResolver;
 }): ChapterContextManifestService {
   return {
     async freeze(input) {
@@ -73,6 +77,7 @@ export function createChapterContextManifestService(options: {
       const recipe = await requiredDocument(options.driver, input.projectId, `production:creative_recipe:${input.chapterId}`, "creative_recipe", "CreativeRecipe");
       assertRecipe(recipe.payload, input.chapterId);
       if (recipe.payload.chapterContractRevision !== chapterContract.revision) throw new Error("CreativeRecipe 与当前 ChapterContract revision 不一致，必须重新冻结配方。 ");
+      const inputDependencies = await recipeInputDependencies(options.driver, recipe.artifactId, recipe.revision);
 
       const layers: WriterContextLayer[] = [
         { name: "chapter_contract", required: true, documentIds: [chapterContract.documentId], value: chapterContract.payload },
@@ -82,7 +87,13 @@ export function createChapterContextManifestService(options: {
         { name: "reader_state_and_promises", required: false, documentIds: [], value: await readerView(options.driver, input.projectId) },
         { name: "creative_recipe", required: true, documentIds: [recipe.documentId], value: recipe.payload },
       ];
-      const selectedLayers = selectLayersForBudget(layers, input.tokenBudget, input.reservedOutputTokens);
+      assertWriterSafe(layers);
+      if (!options.modelResolver) throw new Error("Writer ContextManifest 没有可用的 ModelResolver；拒绝冻结。 ");
+      const route = await options.modelResolver.resolve({ role: "writer", complexity: "complex" });
+      const tokenBudget = Math.min(input.tokenBudget, route.contextWindowTokens);
+      const reservedOutputTokens = Math.min(input.reservedOutputTokens, route.maxOutputTokens);
+      assertBudget(tokenBudget, reservedOutputTokens);
+      const selectedLayers = selectLayersForBudget(layers, tokenBudget, reservedOutputTokens);
       assertWriterSafe(selectedLayers);
       const manifest: WriterContextManifest = {
         schema_version: 1,
@@ -92,13 +103,15 @@ export function createChapterContextManifestService(options: {
         chapterId: input.chapterId,
         taskRole: "writer",
         conversationHistory: [],
-        tokenBudget: input.tokenBudget,
-        reservedOutputTokens: input.reservedOutputTokens,
+        tokenBudget,
+        reservedOutputTokens,
+        modelContextWindowTokens: route.contextWindowTokens,
+        modelMaxOutputTokens: route.maxOutputTokens,
         tokenEstimate: 0,
         layers: selectedLayers,
       };
       manifest.tokenEstimate = estimateTokens(JSON.stringify(manifest.layers));
-      if (manifest.tokenEstimate + input.reservedOutputTokens > input.tokenBudget) throw new Error("ContextManifest 超出 token 预算，拒绝调用 Writer。 ");
+      if (manifest.tokenEstimate + reservedOutputTokens > tokenBudget) throw new Error("ContextManifest 超出有效模型 token 预算，拒绝调用 Writer。 ");
       const object = await options.objects.put({ content: encoder.encode(JSON.stringify(manifest)), mediaType: "application/vnd.ainovr.chapter-context-manifest+json" });
       return options.commands.execute({
         ...input.command,
@@ -116,11 +129,20 @@ export function createChapterContextManifestService(options: {
             manifestId: input.manifestId,
             chapterId: input.chapterId,
             taskRole: "writer",
-            tokenBudget: input.tokenBudget,
-            reservedOutputTokens: input.reservedOutputTokens,
+            tokenBudget,
+            reservedOutputTokens,
+            modelContextWindowTokens: route.contextWindowTokens,
+            modelMaxOutputTokens: route.maxOutputTokens,
             tokenEstimate: manifest.tokenEstimate,
             contextObjectHash: object.sha256,
           },
+          dependencies: [
+            { artifactId: `document:${storyContract.documentId}`, revision: storyContract.revision },
+            { artifactId: `document:${storySystem.documentId}`, revision: storySystem.revision },
+            { artifactId: `document:${chapterContract.documentId}`, revision: chapterContract.revision },
+            { artifactId: `document:${recipe.documentId}`, revision: recipe.revision },
+            ...inputDependencies,
+          ],
           rawOutput: object,
         },
       });
@@ -131,6 +153,7 @@ export function createChapterContextManifestService(options: {
       assertId(input.manifestId, "manifestId");
       const document = await optionalDocument(options.driver, input.projectId, manifestDocumentId(input.manifestId));
       if (!document) return null;
+      if (document.stale) return null;
       if (document.documentType !== "context_manifest" || document.contentObjectHash === null) throw new Error("ContextManifest 文档损坏。 ");
       const parsed = parseManifest(decoder.decode(await options.objects.read(document.contentObjectHash)));
       if (parsed.projectId !== input.projectId || parsed.manifestId !== input.manifestId) throw new Error("ContextManifest 与请求不匹配。 ");
@@ -216,9 +239,11 @@ function asRecord(value: unknown): RecordValue {
 
 interface ProjectDocument {
   documentId: string;
+  artifactId: string;
   documentType: string;
   status: string;
   revision: number;
+  stale: boolean;
   payload: RecordValue;
   contentObjectHash: string | null;
 }
@@ -229,14 +254,15 @@ function manifestDocumentId(manifestId: string): string {
 
 async function requiredDocument(driver: SqlDriver, projectId: string, documentId: string, type: string, label: string): Promise<ProjectDocument> {
   const document = await optionalDocument(driver, projectId, documentId);
-  if (!document || document.documentType !== type || (document.status !== "approved" && document.status !== "frozen" && document.status !== "canonical")) throw new Error(`${label} 不存在或尚未批准，无法构建 Writer ContextManifest。`);
+  if (!document || document.documentType !== type || document.stale || (document.status !== "approved" && document.status !== "frozen" && document.status !== "canonical")) throw new Error(`${label} 不存在、已过期或尚未批准，无法构建 Writer ContextManifest。`);
   return document;
 }
 
 async function optionalDocument(driver: SqlDriver, projectId: string, documentId: string): Promise<ProjectDocument | null> {
-  const rows = await driver.query<{ document_id: string; document_type: string; status: string; current_revision: number; payload_json: string; content_object_hash: string | null }>({
+  const rows = await driver.query<{ document_id: string; artifact_id: string; document_type: string; status: string; current_revision: number; payload_json: string; content_object_hash: string | null; stale: number }>({
     sql: `
-      SELECT doc.document_id, doc.document_type, doc.status, artifact.current_revision, revision.payload_json, revision.content_object_hash
+      SELECT doc.document_id, doc.artifact_id, doc.document_type, doc.status, artifact.current_revision, revision.payload_json, revision.content_object_hash,
+             CASE WHEN EXISTS (SELECT 1 FROM artifact_dependencies dep WHERE dep.artifact_id = artifact.artifact_id AND dep.revision = artifact.current_revision AND dep.stale = 1) THEN 1 ELSE 0 END AS stale
       FROM project_documents doc
       INNER JOIN artifacts artifact ON artifact.artifact_id = doc.artifact_id
       INNER JOIN artifact_revisions revision ON revision.artifact_id = artifact.artifact_id AND revision.revision = artifact.current_revision
@@ -245,7 +271,20 @@ async function optionalDocument(driver: SqlDriver, projectId: string, documentId
     params: [projectId, documentId],
   });
   const row = rows[0];
-  return row ? { documentId: row.document_id, documentType: row.document_type, status: row.status, revision: row.current_revision, payload: parseRecord(row.payload_json, "项目文档 payload"), contentObjectHash: row.content_object_hash } : null;
+  return row ? { documentId: row.document_id, artifactId: row.artifact_id, documentType: row.document_type, status: row.status, revision: row.current_revision, stale: row.stale === 1, payload: parseRecord(row.payload_json, "项目文档 payload"), contentObjectHash: row.content_object_hash } : null;
+}
+
+async function recipeInputDependencies(driver: SqlDriver, artifactId: string, revision: number): Promise<Array<{ artifactId: string; revision: number }>> {
+  const rows = await driver.query<{ depends_on_artifact_id: string; depends_on_revision: number }>({
+    sql: `SELECT depends_on_artifact_id, depends_on_revision
+          FROM artifact_dependencies
+          WHERE artifact_id = ? AND revision = ?
+            AND (depends_on_artifact_id LIKE 'mechanism:%' OR depends_on_artifact_id LIKE 'document:production:chapter_mechanism_application:%')
+            AND stale = 0
+          ORDER BY depends_on_artifact_id ASC`,
+    params: [artifactId, revision],
+  });
+  return rows.map((row) => ({ artifactId: row.depends_on_artifact_id, revision: row.depends_on_revision }));
 }
 
 async function assertProject(driver: SqlDriver, projectId: string): Promise<void> {
@@ -294,7 +333,9 @@ async function readerView(driver: SqlDriver, projectId: string): Promise<RecordV
 }
 
 function assertRecipe(payload: RecordValue, chapterId: string): void {
-  if (payload.schema_version !== 1 || payload.kind !== "creative_recipe" || payload.chapterId !== chapterId || !Array.isArray(payload.mechanismCardIds) || !Array.isArray(payload.writerMechanisms) || !Array.isArray(payload.editorMechanisms)) throw new Error("CreativeRecipe 不完整，拒绝构建 Writer ContextManifest。 ");
+  if (payload.schema_version !== 1 || payload.kind !== "creative_recipe" || payload.chapterId !== chapterId || !Number.isInteger(payload.chapterContractRevision) || !Array.isArray(payload.writerMechanisms) || !Array.isArray(payload.editorMechanisms)) throw new Error("CreativeRecipe 不完整，拒绝构建 Writer ContextManifest。 ");
+  const selection = [payload.applicationId, payload.applicationRevision, payload.mechanismAssetId, payload.mechanismRevision];
+  if (selection.some((value) => value === undefined) || (selection.some((value) => value === null) && selection.some((value) => value !== null))) throw new Error("CreativeRecipe 的本章采用记录冻结不完整，拒绝构建 Writer ContextManifest。 ");
   const serialized = JSON.stringify({ writerMechanisms: payload.writerMechanisms, editorMechanisms: payload.editorMechanisms });
   if (/"(?:source|provenance|evidence|span|analysisProjectId)"/i.test(serialized)) throw new Error("CreativeRecipe 包含来源侧字段，拒绝构建 Writer ContextManifest。 ");
 }
@@ -306,6 +347,7 @@ function assertWriterSafe(value: unknown): void {
   const forbidden = new Set(["source", "reference", "referencetitle", "provenance", "evidence", "span", "analysisprojectid", "originaltext", "excerpt"]);
   const visit = (current: unknown): void => {
     if (Array.isArray(current)) { current.forEach(visit); return; }
+    if (typeof current === "string" && /(?:参考作品|原文摘录|provenance|sourcehash|exacttexthash|spanid|analysisprojectid|《[^》]+》)/i.test(current)) throw new Error("Writer ContextManifest 含来源侧文本值，拒绝冻结。 ");
     if (!current || typeof current !== "object") return;
     for (const [key, nested] of Object.entries(current as Record<string, unknown>)) {
       if (forbidden.has(key.replace(/[^a-z0-9]/gi, "").toLowerCase())) throw new Error("Writer ContextManifest 包含参考侧字段，拒绝冻结。 ");

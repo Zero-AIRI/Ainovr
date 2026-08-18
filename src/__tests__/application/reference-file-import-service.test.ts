@@ -71,6 +71,21 @@ describe("确认门控的参考文件导入", () => {
     await writeFile(markdownPath, "测试", "utf8");
     await expect(files.start({ command: commandBase("markdown"), taskId: "task_markdown", referenceWorkId: "reference_markdown", sourceEditionId: "edition_markdown", title: "非 txt", sourcePath: markdownPath })).rejects.toThrow(/\.txt/i);
   });
+
+  it("拒绝非法 UTF-8 字节，避免静默替换后破坏原文证据定位", async () => {
+    const sourcePath = path.join(externalPath, "malformed.txt");
+    await writeFile(sourcePath, Buffer.from([0xe4, 0xb8]));
+    const schemas = createSchemaRegistry();
+    registerCorePayloadSchemas(schemas);
+    const objects = await createNodeObjectStore({ workspacePath });
+    const application = createWorkspaceApplicationService({ driver, schemas });
+    const files = createReferenceFileImportService({ commands: application.commands, tasks: createTaskRunner(driver), objects, references: createReferenceImportService({ driver, commands: application.commands, objects }), hostId: "reference-file-test" });
+    const requested = await files.start({ command: commandBase("malformed"), taskId: "task_malformed", referenceWorkId: "reference_malformed", sourceEditionId: "edition_malformed", title: "损坏 UTF-8", sourcePath });
+    if (requested.kind !== "needs_confirmation") throw new Error("expected confirmation");
+    await application.commands.approveConfirmation({ confirmationId: requested.confirmationId, actor: { kind: "human_via_agent", id: "test" }, reason: "测试 UTF-8 校验。" });
+    await expect(files.run("task_malformed")).rejects.toThrow(/UTF-8/);
+    await expect(files.getTask("task_malformed")).resolves.toMatchObject({ status: "failed" });
+  });
 });
 
 function commandBase(suffix = "base") {

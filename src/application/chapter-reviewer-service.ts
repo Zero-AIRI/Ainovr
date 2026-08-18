@@ -1,9 +1,11 @@
 import type { CommandEnvelope, CommandResult } from "@/application/command-types";
 import type { ChapterReaderContextManifest, ChapterReaderDraft, ChapterReaderKind } from "@/application/chapter-reader-manifest-service";
 import type { ChapterReaderFeedback } from "@/application/chapter-reader-service";
+import type { ChapterMechanismApplicationSnapshot } from "@/application/chapter-mechanism-application-service";
 import { validateChapterReviewOutput, type ChapterReview, type ChapterReviewService } from "@/application/chapter-review-service";
 import type { LocalCreationOutputValidationInput, LocalCreationService } from "@/application/local-creation-service";
 import type { TaskRecord } from "@/application/task-runner";
+import type { ResolvedModelRoute } from "@/application/model-resolver";
 
 const READER_KINDS = ["immersive", "low_patience", "logic_sensitive"] as const;
 type RecordValue = Record<string, unknown>;
@@ -19,6 +21,9 @@ export interface ChapterReviewerTaskManifest {
   conversationHistory: [];
   draft: ChapterReaderDraft;
   readerFeedbacks: ChapterReaderFeedback[];
+  application: ChapterMechanismApplicationSnapshot | null;
+  /** ContextManifest 以新的 manifestId 冻结，当前实现的精确 artifact revision 为 1。 */
+  writerManifestRevision: number | null;
 }
 
 export interface ChapterReviewerService {
@@ -34,6 +39,7 @@ export interface ChapterReviewerService {
     title: string;
     baseURL: string;
     model: string;
+    frozenRoute?: ResolvedModelRoute;
     maxTokens?: number;
   }): Promise<CommandResult>;
   run(taskId: string): Promise<TaskRecord | null>;
@@ -52,6 +58,7 @@ export function createChapterReviewerService(options: {
   readerManifests: Pick<{ get(input: { projectId: string; manifestId: string }): Promise<ChapterReaderContextManifest | null> }, "get">;
   readerFeedbacks: Pick<{ getReport(input: { documentId: string }): Promise<ChapterReaderFeedback | null> }, "getReport">;
   reviews: Pick<ChapterReviewService, "get">;
+  applications?: Pick<{ get(input: { projectId: string; chapterId: string }): Promise<ChapterMechanismApplicationSnapshot | null> }, "get">;
 }): ChapterReviewerService {
   return {
     async start(input) {
@@ -71,6 +78,7 @@ export function createChapterReviewerService(options: {
         prompt: reviewerPrompt(manifest),
         baseURL: input.baseURL,
         model: input.model,
+        ...(input.frozenRoute ? { frozenRoute: input.frozenRoute } : {}),
         ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
         outputMode: "structured_json",
         metadata: {
@@ -106,11 +114,13 @@ export function validateChapterReviewerOutput(input: LocalCreationOutputValidati
     readerManifestIds: manifest.readerManifestIds,
     readerFeedbackDocumentIds: manifest.readerFeedbackDocumentIds,
     draft: manifest.draft,
+    application: manifest.application,
+    writerManifestRevision: manifest.writerManifestRevision,
   });
 }
 
 async function buildManifest(
-  options: Pick<Parameters<typeof createChapterReviewerService>[0], "readerManifests" | "readerFeedbacks">,
+  options: Pick<Parameters<typeof createChapterReviewerService>[0], "readerManifests" | "readerFeedbacks" | "applications">,
   input: { projectId: string; chapterId: string; reviewId: string; readerManifestIds: string[]; readerFeedbackDocumentIds: string[] },
   draft: ChapterReaderDraft,
 ): Promise<ChapterReviewerTaskManifest> {
@@ -134,6 +144,7 @@ async function buildManifest(
     feedbackByKind.set(feedback.readerKind, feedback);
   }
   if (READER_KINDS.some((kind) => !feedbackByKind.has(kind))) throw new Error("Reviewer 任务缺少三个 Reader 的独立反馈。 ");
+  const application = await options.applications?.get({ projectId: input.projectId, chapterId: input.chapterId }) ?? null;
   return {
     schema_version: 1,
     kind: "chapter_reviewer_task_manifest",
@@ -145,6 +156,8 @@ async function buildManifest(
     conversationHistory: [],
     draft,
     readerFeedbacks: READER_KINDS.map((kind) => feedbackByKind.get(kind)!),
+    application,
+    writerManifestRevision: application ? 1 : null,
   };
 }
 
@@ -152,9 +165,9 @@ function reviewerPrompt(manifest: ChapterReviewerTaskManifest): string {
   return [
     "你是 Ainovr 的独立 Reviewer。只依据下方冻结任务输入，综合结构、连续性、表达与原创性/来源泄漏风险提出可执行问题。",
     "不得输出赞美、评分、总体通过结论、Markdown 或任何正文外猜测。issues 可以为空；每个问题都必须给出原样 quote 与 UTF-8 半开字节区间 [startByte,endByte)。",
-    "只输出一个 JSON 对象，字段固定为 schema_version、kind、reviewId、projectId、chapterId、draftDocumentId、draftRevision、readerManifestIds、readerFeedbackDocumentIds、issues；每个 issue 固定为 id、category、severity、message、startByte、endByte、quote。category 只能为 structure、continuity、expression、originality；severity 只能为 blocker、major、minor。",
+    "只输出一个 JSON 对象，字段固定为 schema_version、kind、reviewId、projectId、chapterId、draftDocumentId、draftRevision、readerManifestIds、readerFeedbackDocumentIds、applicationId、applicationRevision、writerManifestId、writerManifestRevision、issues、effectAssessments；每个 issue 固定为 id、category、severity、message、startByte、endByte、quote。category 只能为 structure、continuity、expression、originality；severity 只能为 blocker、major、minor。若 Manifest 含本章采用记录，effectAssessments 必须逐项匹配 reviewSignals，字段为 signal、status、explanation、anchors、可选 sideEffect、suggestedAction；status 只能为 observed、partial、not_observed、counteracted、unknown、not_applicable；suggestedAction 只能为 accept_current、request_revision、return_mechanism。",
     "请使用以下不可改名的 JSON 骨架：",
-    JSON.stringify({ schema_version: 1, kind: "chapter_review", reviewId: manifest.reviewId, projectId: manifest.projectId, chapterId: manifest.chapterId, draftDocumentId: manifest.draft.documentId, draftRevision: manifest.draft.revision, readerManifestIds: manifest.readerManifestIds, readerFeedbackDocumentIds: manifest.readerFeedbackDocumentIds, issues: [] }),
+    JSON.stringify({ schema_version: 1, kind: "chapter_review", reviewId: manifest.reviewId, projectId: manifest.projectId, chapterId: manifest.chapterId, draftDocumentId: manifest.draft.documentId, draftRevision: manifest.draft.revision, readerManifestIds: manifest.readerManifestIds, readerFeedbackDocumentIds: manifest.readerFeedbackDocumentIds, applicationId: manifest.application?.applicationId ?? null, applicationRevision: manifest.application?.revision ?? null, writerManifestId: manifest.application ? manifest.draft.manifestId : null, writerManifestRevision: manifest.writerManifestRevision, issues: [], effectAssessments: [] }),
     "<AINOVR_REVIEWER_TASK_MANIFEST>",
     JSON.stringify(manifest),
     "</AINOVR_REVIEWER_TASK_MANIFEST>",
@@ -170,7 +183,7 @@ function manifestFromPrompt(prompt: string): ChapterReviewerTaskManifest {
   try {
     const value = JSON.parse(prompt.slice(start + startTag.length, end));
     const record = recordValue(value);
-    if (!record || record.schema_version !== 1 || record.kind !== "chapter_reviewer_task_manifest" || !Array.isArray(record.conversationHistory) || record.conversationHistory.length !== 0 || !recordValue(record.draft) || !Array.isArray(record.readerManifestIds) || !Array.isArray(record.readerFeedbackDocumentIds)) throw new Error();
+    if (!record || record.schema_version !== 1 || record.kind !== "chapter_reviewer_task_manifest" || !Array.isArray(record.conversationHistory) || record.conversationHistory.length !== 0 || !recordValue(record.draft) || !Array.isArray(record.readerManifestIds) || !Array.isArray(record.readerFeedbackDocumentIds) || !(record.application === null || recordValue(record.application)) || !(record.writerManifestRevision === null || (Number.isInteger(record.writerManifestRevision) && (record.writerManifestRevision as number) > 0))) throw new Error();
     return value as ChapterReviewerTaskManifest;
   } catch { throw new Error("Reviewer 任务冻结输入损坏。 "); }
 }

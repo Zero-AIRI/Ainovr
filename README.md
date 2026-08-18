@@ -15,17 +15,17 @@ CLI / stdio MCP ─────────────────────�
 ```
 
 - UI、CLI 和 MCP 共享同一套 Application Service 语义。
-- Node sidecar、CLI 和 MCP 使用 `better-sqlite3`；Tauri Rust 只负责 sidecar 生命周期、固定工作区定位和 JSON-RPC 输入边界。
+- Node sidecar、CLI 和 MCP 使用 `better-sqlite3`；Tauri Rust 只负责 sidecar 生命周期、固定工作区定位和 JSON-RPC 输入边界，不直接访问 SQLite。
 - 正文、原文、Prompt 与大型上下文使用内容寻址对象存储；SQLite 保存结构化索引、revision、依赖和审计。
 - 所有写入走 CommandService，读取走 QueryService，长任务走带 lease、heartbeat、checkpoint、取消和恢复能力的 TaskRunner。
-- MCP/CLI 只提供领域命令，不提供 SQL、数据库文件或任意路径文件工具。
+- MCP/CLI 只提供领域命令，不提供 SQL、数据库文件、Secret 或任意路径文件工具。
 
 完整架构决策见 [ADR-0001](docs/adr/0001-final-rebuild-architecture.md)。
 
 ## 技术栈
 
 - TypeScript 5（严格模式）、React 19、Vite 7、Tailwind CSS 4
-- Tauri 2 与 Rust 2021；Rust 侧使用 `rusqlite`（bundled）
+- Tauri 2 与 Rust 2021；Rust 侧只负责 sidecar 生命周期和 JSON-RPC 输入边界
 - Node 侧 `better-sqlite3`
 - Vitest 4 与 ESLint 9
 
@@ -77,11 +77,20 @@ node dist-mcp/ainovr-mcp.mjs --workspace .
 
 MCP 客户端使用该 stdio 命令即可与 UI 操作同一工作区。示例配置及连通性检查见 [MCP companion 设置](docs/rebuild/mcp-companion-setup.md)。
 
+未传入工作区时，CLI/MCP 使用 Windows `%APPDATA%\com.ainovr.app`，与发布版桌面端一致。`--workspace <目录>` 优先级最高，适用于开发、便携目录、测试夹具和恢复目录；`AINOVR_WORKSPACE` 可作为次级覆盖。开发脚本继续显式使用 `--workspace .`，不会触碰发布版数据。
+
 ## 本地模型创作
 
 本地模型调用只允许回环 HTTP 地址。标准 Ollama 端口会使用原生 `/api/chat`，关闭思考模式；正文任务直接输出原创文本，结构化 Reader/Reviewer/Editor 任务会请求 JSON 并在本地严格校验。
 
-通过领域命令创建或更新本地回环 Provider Profile，再由启动进程为需要认证的远端 Provider 注入相应环境变量。API Key 不进入项目工作区、数据库、对象库、导出、日志、审计或模型上下文。
+Provider、角色路由和模型预算通过 Ainovr 的“设置”工作台或领域 MCP/CLI 保存为非秘密元数据。API Key 不进入 Ainovr 数据库、对象库、导出、日志、审计或 Prompt；需要云端模型时，将密钥只注入启动 CLI/MCP 进程的环境变量：
+
+```powershell
+$env:AINOVR_PROVIDER_00007A000065000075000073_API_KEY = "<仅当前进程可见的密钥>"
+node dist-mcp/ainovr-mcp.mjs
+```
+
+环境变量中的 Provider ID 使用每个 Unicode 字符的十六进制编码，以避免 `a-b`、`a_b` 或大小写 ID 在 Windows 上碰撞。可调用 `providerEnvironmentVariableName()` 生成名称。本地 Ollama 不需要 API Key；角色路由中的 `baseURL`、协议、模型和预算仍由设置工作台保存。
 
 ## 从参考分析到原创生产
 
@@ -109,7 +118,7 @@ data/
 └── restores/              # 受控恢复演练结果
 ```
 
-不要手工修改数据库或对象库。外部绝对路径导入、恢复、覆盖与删除操作会创建持久 confirmation；Agent 代表用户批准时会以 `human_via_agent` 审计。
+不要手工修改数据库或对象库，也不要把 API Key 写入工作区。外部绝对路径导入、恢复、覆盖与删除操作会创建持久 confirmation；Agent 代表用户批准时会以 `human_via_agent` 审计。
 
 ## 项目结构
 

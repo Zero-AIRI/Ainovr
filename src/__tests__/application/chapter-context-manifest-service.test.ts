@@ -29,9 +29,10 @@ describe("ChapterContextManifest Application Service", () => {
     await saveDocument(application, "story_contract", "planning:project_001:story_contract", { corePromise: "异常必有代价", centralConflict: "守钟还是开门", endingDirection: "承担选择", immutableBoundaries: ["不解释为梦"] });
     await saveDocument(application, "story_system", "planning:project_001:story_system", { worldRules: ["钟只倒走七分钟"], characterSystem: ["林霁只能依据证据行动"], causalityRules: ["每个异常留下代价"], informationRules: ["解释不得早于异常"] });
     await saveDocument(application, "chapter_contract", "planning:project_001:chapter_contract:chapter_001", { chapterId: "chapter_001", ordinal: 1, entryState: ["林霁不知道信的来源"], exitState: ["林霁决定进入钟楼"], desire: "确认信件来源", pressure: "潮水上涨", turningPoint: "指针倒转", mustNotHappen: ["不揭示全部真相"], readerPromiseAction: "establish", emotionalCycle: "迟疑转为承担", nextChapterInterface: ["钟楼内部线索"], mechanismCardIds: [] });
-    await saveDocument(application, "creative_recipe", "production:creative_recipe:chapter_001", { chapterId: "chapter_001", chapterContractRevision: 1, mechanismCardIds: [], writerMechanisms: [], editorMechanisms: [] });
+    await saveDocument(application, "creative_recipe", "production:creative_recipe:chapter_001", { chapterId: "chapter_001", chapterContractRevision: 1, applicationId: null, applicationRevision: null, mechanismAssetId: null, mechanismRevision: null, writerMechanisms: [], editorMechanisms: [] });
     await saveDocument(application, "untrusted_reference_copy", "other:reference", { title: "禁泄漏参考名", text: "任何 Writer 都不能看到这段内容" });
-    const manifests = createChapterContextManifestService({ driver, commands: application.commands, objects });
+    const modelResolver = { resolve: async () => ({ role: "writer" as const, providerProfileId: "provider_local", baseURL: "http://127.0.0.1:11434/v1", model: "qwen3:8b", protocol: "chat_completions" as const, contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, isCloud: false, cloudEscalation: "never" as const }) };
+    const manifests = createChapterContextManifestService({ driver, commands: application.commands, objects, modelResolver });
 
     await expect(manifests.freeze({ command: command("manifest"), projectId: "project_001", chapterId: "chapter_001", manifestId: "manifest_001", tokenBudget: 4096, reservedOutputTokens: 1024 }))
       .resolves.toMatchObject({ kind: "ok", revision: 1 });
@@ -41,6 +42,10 @@ describe("ChapterContextManifest Application Service", () => {
       "chapter_contract", "story_contract_and_system", "canon_and_character", "recent_accepted_text", "reader_state_and_promises", "creative_recipe",
     ]);
     expect(JSON.stringify(manifest)).not.toContain("禁泄漏参考名");
+    expect(manifest).toMatchObject({ tokenBudget: 4096, reservedOutputTokens: 1024, modelContextWindowTokens: 4096, modelMaxOutputTokens: 1024 });
+
+    await application.commands.execute({ ...command("chapter_contract_update"), projectId: "project_001", expectedRevision: 1, tool: "commit_project_planning_document", args: { projectId: "project_001", documentId: "planning:project_001:chapter_contract:chapter_001", documentType: "chapter_contract", status: "approved", expectedRevision: 1, payload: { schema_version: 1, kind: "chapter_contract", chapterId: "chapter_001", ordinal: 1, entryState: ["林霁不知道信的来源"], exitState: ["林霁决定进入钟楼"], desire: "确认信件来源", pressure: "潮水上涨", turningPoint: "指针倒转", mustNotHappen: ["不揭示全部真相"], readerPromiseAction: "establish", emotionalCycle: "迟疑转为承担", nextChapterInterface: ["钟楼内部线索"], mechanismCardIds: [] } } });
+    await expect(manifests.get({ projectId: "project_001", manifestId: "manifest_001" })).resolves.toBeNull();
   });
 
   it("缺少必需的 StoryContract、StorySystem、ChapterContract 或 CreativeRecipe 时 fail closed", async () => {
@@ -61,7 +66,7 @@ describe("ChapterContextManifest Application Service", () => {
     await saveDocument(application, "story_contract", "planning:project_001:story_contract", { corePromise: "承诺", centralConflict: "冲突", endingDirection: "结局", immutableBoundaries: ["边界"], referenceTitle: "不应进入 Writer 的参考书" });
     await saveDocument(application, "story_system", "planning:project_001:story_system", { worldRules: ["规则"], characterSystem: ["人物"], causalityRules: ["因果"], informationRules: ["信息"] });
     await saveDocument(application, "chapter_contract", "planning:project_001:chapter_contract:chapter_001", { chapterId: "chapter_001", ordinal: 1, entryState: ["进入"], exitState: ["离开"], desire: "目标", pressure: "压力", turningPoint: "转折", mustNotHappen: [], readerPromiseAction: "establish", emotionalCycle: "变化", nextChapterInterface: ["接口"], mechanismCardIds: [] });
-    await saveDocument(application, "creative_recipe", "production:creative_recipe:chapter_001", { chapterId: "chapter_001", chapterContractRevision: 1, mechanismCardIds: [], writerMechanisms: [], editorMechanisms: [] });
+    await saveDocument(application, "creative_recipe", "production:creative_recipe:chapter_001", { chapterId: "chapter_001", chapterContractRevision: 1, applicationId: null, applicationRevision: null, mechanismAssetId: null, mechanismRevision: null, writerMechanisms: [], editorMechanisms: [] });
 
     const manifests = createChapterContextManifestService({ driver, commands: application.commands, objects });
     await expect(manifests.freeze({ command: command("manifest_tainted"), projectId: "project_001", chapterId: "chapter_001", manifestId: "manifest_tainted", tokenBudget: 4096, reservedOutputTokens: 1024 })).rejects.toThrow(/参考侧字段/);

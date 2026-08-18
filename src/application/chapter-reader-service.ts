@@ -2,6 +2,7 @@ import type { CommandEnvelope, CommandResult } from "@/application/command-types
 import type { ChapterReaderContextManifest, ChapterReaderKind } from "@/application/chapter-reader-manifest-service";
 import type { LocalCreationOutputValidationInput, LocalCreationService } from "@/application/local-creation-service";
 import type { TaskRecord } from "@/application/task-runner";
+import type { ResolvedModelRoute } from "@/application/model-resolver";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -43,6 +44,7 @@ export interface ChapterReaderService {
     title: string;
     baseURL: string;
     model: string;
+    frozenRoute?: ResolvedModelRoute;
     maxTokens?: number;
   }): Promise<CommandResult>;
   run(taskId: string): Promise<TaskRecord | null>;
@@ -72,6 +74,7 @@ export function createChapterReaderService(options: {
         prompt: readerPrompt(manifest, input.reportId),
         baseURL: input.baseURL,
         model: input.model,
+        ...(input.frozenRoute ? { frozenRoute: input.frozenRoute } : {}),
         ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
         outputMode: "structured_json",
         metadata: {

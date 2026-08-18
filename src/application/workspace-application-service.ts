@@ -17,6 +17,7 @@ import type { TaskRecord, TaskRunner } from "@/application/task-runner";
 import { createPipelineRevisionService, type PipelineRevisionService } from "@/application/pipeline-revision-service";
 import { PIPELINE_DOMAIN_TOOLS } from "@/application/pipeline-revision-service";
 import { createPipelineRunService, type PipelineRunService } from "@/application/pipeline-run-service";
+import type { ModelResolver } from "@/application/model-resolver";
 
 export interface WorkspaceQueryService {
   getNovelProject(projectId: string): Promise<NovelProjectRecord | null>;
@@ -84,10 +85,35 @@ export interface ProjectWorkbenchView {
   status: string;
   revision: number;
   chapters: ProjectChapterWorkbenchView[];
+  /** 章节级固定生产链；节点只含短元数据，不返回正文、Prompt 或参考侧内容。 */
+  productionChains: ChapterProductionChainView[];
   canonEntries: CanonEntryWorkbenchView[];
   readerPromises: ReaderPromiseWorkbenchView[];
   /** 最后一个已正式提交章节；尚无正式章节时为 null。 */
   productionCursor: ProductionCursorWorkbenchView | null;
+}
+
+export type ChapterProductionStage =
+  | "chapter_contract" | "creative_recipe" | "context_manifest" | "writer_v1"
+  | "reader_immersive" | "reader_low_patience" | "reader_logic_sensitive"
+  | "reviewer" | "editor_v2" | "editor_v3" | "production_commit";
+
+export interface ChapterProductionNodeView {
+  stage: ChapterProductionStage;
+  label: string;
+  status: string;
+  revision: number | null;
+  executionRef: string | null;
+  model: string | null;
+  outputHash: string | null;
+  stale: boolean;
+  blockingReason: string | null;
+}
+
+export interface ChapterProductionChainView {
+  chapterId: string;
+  ordinal: number | null;
+  nodes: ChapterProductionNodeView[];
 }
 
 export interface ProjectChapterWorkbenchView {
@@ -126,6 +152,137 @@ export interface ProductionCursorWorkbenchView {
   nextChapterOrdinal: number;
 }
 
+interface RawProductionDocumentRow {
+  document_id: string;
+  document_type: string;
+  status: string;
+  current_revision: number;
+  payload_json: string;
+  content_object_hash: string | null;
+  task_status: string | null;
+  stale: number;
+}
+
+const PRODUCTION_STAGE_DEFINITIONS: ReadonlyArray<{ stage: ChapterProductionStage; label: string }> = [
+  { stage: "chapter_contract", label: "ChapterContract" },
+  { stage: "creative_recipe", label: "CreativeRecipe" },
+  { stage: "context_manifest", label: "Writer ContextManifest" },
+  { stage: "writer_v1", label: "Writer V1" },
+  { stage: "reader_immersive", label: "沉浸型 Reader" },
+  { stage: "reader_low_patience", label: "低耐心 Reader" },
+  { stage: "reader_logic_sensitive", label: "逻辑敏感 Reader" },
+  { stage: "reviewer", label: "Reviewer" },
+  { stage: "editor_v2", label: "Editor V2" },
+  { stage: "editor_v3", label: "Editor V3" },
+  { stage: "production_commit", label: "ProductionCommit" },
+];
+
+function buildChapterProductionChains(
+  rows: readonly RawProductionDocumentRow[],
+  chapters: ReadonlyArray<{ chapter_id: string; ordinal: number }>,
+): ChapterProductionChainView[] {
+  const chapterOrdinals = new Map(chapters.map((chapter) => [chapter.chapter_id, chapter.ordinal]));
+  const candidates = new Map<string, Map<ChapterProductionStage, { node: ChapterProductionNodeView; priority: number }>>();
+  for (const row of rows) {
+    const payload = parseRecord(row.payload_json, `Production document ${row.document_id}`);
+    const metadata = nestedRecord(payload.contextMetadata);
+    const chapterId = optionalString(payload.chapterId) ?? optionalString(metadata?.chapterId);
+    if (!chapterId) continue;
+    const stage = productionStage(row.document_type, payload, metadata);
+    if (!stage) continue;
+    const ordinal = payload.ordinal;
+    if (Number.isInteger(ordinal) && (ordinal as number) >= 1 && !chapterOrdinals.has(chapterId)) chapterOrdinals.set(chapterId, ordinal as number);
+    const executionRef = optionalString(payload.executionRef) ?? optionalString(payload.taskId);
+    const lineage = nestedRecord(payload.lineage);
+    const selectedDraft = nestedRecord(payload.selectedDraft);
+    const model = optionalString(payload.editorModel) ?? optionalString(payload.model) ?? optionalString(lineage?.model) ?? optionalString(selectedDraft?.model) ?? optionalString(payload.sourceModel);
+    const stale = row.stale === 1;
+    const status = stale ? "stale" : (row.task_status ?? row.status);
+    const node: ChapterProductionNodeView = {
+      stage,
+      label: PRODUCTION_STAGE_DEFINITIONS.find((definition) => definition.stage === stage)!.label,
+      status,
+      revision: row.current_revision,
+      executionRef,
+      model,
+      outputHash: row.content_object_hash,
+      stale,
+      blockingReason: stale ? "上游 revision 已变化，需要重新冻结该节点。" : taskBlockingReason(status),
+    };
+    const byStage = candidates.get(chapterId) ?? new Map();
+    candidates.set(chapterId, byStage);
+    const priority = productionDocumentPriority(row.document_type, metadata);
+    const current = byStage.get(stage);
+    if (!current || priority >= current.priority) byStage.set(stage, { node, priority });
+  }
+
+  for (const chapter of chapters) if (!candidates.has(chapter.chapter_id)) candidates.set(chapter.chapter_id, new Map());
+  return [...candidates.entries()].map(([chapterId, byStage]) => {
+    const nodes = PRODUCTION_STAGE_DEFINITIONS.map(({ stage, label }) => byStage.get(stage)?.node ?? {
+      stage,
+      label,
+      status: "not_started",
+      revision: null,
+      executionRef: null,
+      model: null,
+      outputHash: null,
+      stale: false,
+      blockingReason: missingStageReason(stage, byStage),
+    });
+    return { chapterId, ordinal: chapterOrdinals.get(chapterId) ?? null, nodes };
+  }).sort((left, right) => (left.ordinal ?? Number.MAX_SAFE_INTEGER) - (right.ordinal ?? Number.MAX_SAFE_INTEGER) || left.chapterId.localeCompare(right.chapterId));
+}
+
+function productionStage(documentType: string, payload: Record<string, unknown>, metadata: Record<string, unknown> | null): ChapterProductionStage | null {
+  if (documentType === "chapter_contract") return "chapter_contract";
+  if (documentType === "creative_recipe") return "creative_recipe";
+  if (documentType === "context_manifest" && payload.taskRole === "writer") return "context_manifest";
+  if (documentType === "local_creation_draft" && metadata?.kind === "chapter_writer_draft") return "writer_v1";
+  if (documentType === "reader_context_manifest" || (documentType === "local_creation_draft" && metadata?.kind === "chapter_reader_feedback")) {
+    const readerKind = optionalString(payload.readerKind) ?? optionalString(metadata?.readerKind);
+    if (readerKind === "immersive") return "reader_immersive";
+    if (readerKind === "low_patience") return "reader_low_patience";
+    if (readerKind === "logic_sensitive") return "reader_logic_sensitive";
+  }
+  if (documentType === "chapter_review") return "reviewer";
+  if (documentType === "chapter_editor_draft") return payload.revision === "v2" ? "editor_v2" : payload.revision === "v3" ? "editor_v3" : null;
+  if (documentType === "chapter_text") return "production_commit";
+  return null;
+}
+
+function productionDocumentPriority(documentType: string, metadata: Record<string, unknown> | null): number {
+  return documentType === "local_creation_draft" && metadata?.kind === "chapter_reader_feedback" ? 2 : 1;
+}
+
+function taskBlockingReason(status: string): string | null {
+  if (status === "pending_review") return "等待人工审核当前 revision。";
+  if (status === "failed") return "任务失败；检查诊断后显式重试。";
+  if (status === "cancelled" || status === "cancel_requested") return "任务已取消；需要重新排队后继续。";
+  if (status === "queued") return "任务已排队，等待宿主执行。";
+  if (status === "paused" || status === "waiting_confirmation") return "任务暂停，等待人工处理。";
+  return null;
+}
+
+function missingStageReason(stage: ChapterProductionStage, stages: ReadonlyMap<ChapterProductionStage, unknown>): string {
+  if (stage === "chapter_contract") return "尚未创建并批准 ChapterContract。";
+  if (stage === "creative_recipe") return stages.has("chapter_contract") ? "尚未冻结 CreativeRecipe。" : "等待 ChapterContract。";
+  if (stage === "context_manifest") return stages.has("creative_recipe") ? "尚未冻结 Writer ContextManifest。" : "等待 CreativeRecipe。";
+  if (stage === "writer_v1") return stages.has("context_manifest") ? "尚未执行 Writer V1。" : "等待 Writer ContextManifest。";
+  if (stage.startsWith("reader_")) return "等待 Writer V1 成功后运行独立 Reader。";
+  if (stage === "reviewer") return "等待三个独立 Reader 全部完成。";
+  if (stage === "editor_v2") return "等待 Reviewer 问诊与人工选择问题。";
+  if (stage === "editor_v3") return "仅在 V2 仍需定向修订时创建。";
+  return "等待人工选择 V1/V2/V3 并确认 ProductionCommit。";
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 export interface PendingPlanningDocumentView {
   projectId: string;
   projectTitle: string;
@@ -144,6 +301,12 @@ export interface PendingMechanismAssetView {
   targetEffect: string | null;
   scope: string | null;
   targetLayers: string[];
+  when: string[];
+  operations: string[];
+  avoid: string[];
+  applicability: string[];
+  evidenceSpanIds: string[];
+  evidence: Array<{ evidenceInstanceId: string; sourceHash: string; exactTextHash: string; startByte: number; endByte: number }>;
   updatedAt: number;
 }
 
@@ -212,7 +375,11 @@ export interface ProviderProfileView {
   providerProfileId: string;
   name: string;
   baseURL: string;
+  protocol: "chat_completions" | "responses" | "ollama_native";
   defaultModel: string;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  safetyMarginRatio: number;
   revision: number;
   routes: Array<{ role: string; model: string }>;
 }
@@ -276,6 +443,14 @@ export interface WorkspaceApplicationService {
   planningActions: WorkspacePlanningActionService;
   /** 机制采纳从当前候选重新读取完整领域事实，UI 只携带目标项目、CAS revision 和人工决定。 */
   mechanismActions: WorkspaceMechanismActionService;
+  /** Desktop/MCP adapter 的受限章节方法垂直切片入口。 */
+  chapterMethods?: {
+    getWorkbench(input: { projectId: string; chapterId: string }): Promise<unknown>;
+    getApplication(input: { projectId: string; chapterId: string }): Promise<unknown>;
+    saveApplication(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; expectedRevision: number | null; application: Record<string, unknown> }): Promise<CommandResult>;
+    getOutcome(input: { projectId: string; chapterId: string }): Promise<unknown>;
+    saveOutcome(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; expectedRevision: number | null; outcome: Record<string, unknown> }): Promise<CommandResult>;
+  };
 }
 
 export interface WorkspaceTaskActionService {
@@ -315,7 +490,8 @@ export interface WorkspaceProductionActionService {
   createCreativeRecipe(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string }): Promise<CommandResult>;
   freezeChapterContextManifest(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; manifestId: string; tokenBudget: number; reservedOutputTokens: number }): Promise<CommandResult>;
   freezeChapterReaderManifest(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; draftDocumentId: string; manifestId: string; readerKind: "immersive" | "low_patience" | "logic_sensitive"; tokenBudget: number }): Promise<CommandResult>;
-  commitChapter(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; chapterOrdinal: number; draftDocumentId: string; productionCommitId: string; chapterDelta: Record<string, unknown>; canonPatches: Record<string, unknown>[]; characterKnowledgePatches: Record<string, unknown>[]; readerState: Record<string, unknown>; readerPromiseUpdates: Record<string, unknown>[]; outlineDrift: Record<string, unknown> }): Promise<CommandResult>;
+  commitChapter(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; chapterOrdinal: number; draftDocumentId: string; productionCommitId: string; outcomeId?: string; chapterDelta: Record<string, unknown>; canonPatches: Record<string, unknown>[]; characterKnowledgePatches: Record<string, unknown>[]; readerState: Record<string, unknown>; readerPromiseUpdates: Record<string, unknown>[]; outlineDrift: Record<string, unknown> }): Promise<CommandResult>;
+  requestChapterCommit(input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; proposalId: string }): Promise<CommandResult>;
 }
 
 export interface WorkspaceAnalysisActionService {
@@ -336,6 +512,8 @@ export interface CreateWorkspaceApplicationServiceOptions {
   objects?: Pick<ObjectStore, "read">;
   /** 可选于纯 Query/Command 测试；桌面、MCP 与 CLI 运行时必须注入同一 TaskRunner。 */
   tasks?: Pick<TaskRunner, "requestCancel" | "retry" | "get" | "wait">;
+  /** 仅在 PipelineRun 创建时冻结无 Secret Provider 路由。 */
+  modelResolver?: ModelResolver;
   now?: () => number;
 }
 
@@ -353,12 +531,12 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
   // UI 只能审核既有候选；候选编译仍只在 MCP/CLI 的完整 MechanismAsset 服务中进行。
   const mechanisms = createMechanismAssetService({ driver: options.driver, commands });
   const pipelines = createPipelineRevisionService({ driver: options.driver, commands });
-  const pipelineRuns = createPipelineRunService({ driver: options.driver, commands, pipelines });
+  const pipelineRuns = createPipelineRunService({ driver: options.driver, commands, pipelines, modelResolver: options.modelResolver });
   return {
     commands,
     pipelines,
     pipelineRuns,
-    pipelineActions: {
+  pipelineActions: {
       async execute() {
         throw new Error("当前 Application Service 未配置 Pipeline 执行宿主；请由 CLI、MCP 或桌面受信 sidecar 执行。 ");
       },
@@ -414,7 +592,7 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
         assertNonEmptyId(projectId, "projectId");
         const project = await projects.get(projectId);
         if (!project) return null;
-        const [chapters, canonEntries, readerPromises, cursorRows] = await Promise.all([
+        const [chapters, canonEntries, readerPromises, cursorRows, productionDocuments] = await Promise.all([
           options.driver.query<{
             chapter_id: string; ordinal: number; status: string; current_revision: number;
             accepted_document_id: string | null; accepted_document_revision: number | null; accepted_payload_json: string | null;
@@ -466,6 +644,28 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
                   LIMIT 1`,
             params: [projectId],
           }),
+          options.driver.query<RawProductionDocumentRow>({
+            sql: `SELECT document.document_id, document.document_type, document.status,
+                         artifact.current_revision, revision.payload_json, revision.content_object_hash,
+                         task.status AS task_status,
+                         CASE WHEN EXISTS (
+                           SELECT 1 FROM artifact_dependencies dependency
+                           WHERE dependency.artifact_id = artifact.artifact_id
+                             AND dependency.revision = artifact.current_revision
+                             AND dependency.stale = 1
+                         ) THEN 1 ELSE 0 END AS stale
+                  FROM project_documents document
+                  INNER JOIN artifacts artifact ON artifact.artifact_id = document.artifact_id
+                  INNER JOIN artifact_revisions revision ON revision.artifact_id = artifact.artifact_id
+                    AND revision.revision = artifact.current_revision
+                  LEFT JOIN tasks task ON task.task_id = COALESCE(
+                    json_extract(revision.payload_json, '$.executionRef'),
+                    json_extract(revision.payload_json, '$.taskId')
+                  )
+                  WHERE document.project_id = ?
+                  ORDER BY document.updated_at ASC, document.document_id ASC`,
+            params: [projectId],
+          }),
         ]);
         const cursor = cursorRows[0];
         return {
@@ -485,6 +685,7 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
               acceptedTitle: payload ? summaryFromWorkspacePayload(payload) : null,
             } satisfies ProjectChapterWorkbenchView;
           }),
+          productionChains: buildChapterProductionChains(productionDocuments, chapters),
           canonEntries: canonEntries.map((entry) => ({
             canonEntryId: entry.canon_entry_id,
             revision: entry.revision,
@@ -624,7 +825,7 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
                 LIMIT 100`,
           params: [],
         });
-        return rows.flatMap((row) => {
+        const cards = rows.flatMap((row) => {
           const payload = parseRecord(row.payload_json, "MechanismAsset payload");
           const card = recordFromUnknown(payload.card);
           if (!card || card.lifecycle !== "candidate" || card.adoption !== "pending") return [];
@@ -639,9 +840,28 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
             targetEffect: summaryFromWorkspacePayload({ summary: card.effectHypothesis }),
             scope: typeof card.scope === "string" && card.scope.trim() ? card.scope : null,
             targetLayers,
+            when: Array.isArray(card.when) ? card.when.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).slice(0, 8) : [],
+            operations: Array.isArray(card.do) ? card.do.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).slice(0, 8) : [],
+            avoid: Array.isArray(card.avoid) ? card.avoid.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).slice(0, 8) : [],
+            applicability: Array.isArray(card.applicability) ? card.applicability.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).slice(0, 8) : [],
+            evidenceSpanIds: Array.isArray(card.evidenceSpanIds) ? card.evidenceSpanIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).slice(0, 3) : [],
+            evidence: [],
             updatedAt: row.updated_at,
           } satisfies PendingMechanismAssetView];
         });
+        const spanIds = [...new Set(cards.flatMap((card) => card.evidenceSpanIds))];
+        if (spanIds.length === 0) return cards;
+        const placeholders = spanIds.map(() => "?").join(", ");
+        const evidenceRows = await options.driver.query<{ span_id: string; evidence_instance_id: string; source_hash: string; exact_text_hash: string; start_byte: number; end_byte: number }>({
+          sql: `SELECT span.span_id, MIN(evidence.evidence_instance_id) AS evidence_instance_id, edition.source_hash, span.exact_text_hash, span.start_byte, span.end_byte
+                FROM source_spans span INNER JOIN source_editions edition ON edition.source_edition_id = span.source_edition_id
+                INNER JOIN evidence_instances evidence ON evidence.span_id = span.span_id
+                WHERE span.span_id IN (${placeholders})
+                GROUP BY span.span_id, edition.source_hash, span.exact_text_hash, span.start_byte, span.end_byte`,
+          params: spanIds,
+        });
+        const bySpan = new Map(evidenceRows.map((row) => [row.span_id, { evidenceInstanceId: row.evidence_instance_id, sourceHash: row.source_hash, exactTextHash: row.exact_text_hash, startByte: row.start_byte, endByte: row.end_byte }]));
+        return cards.map((card) => ({ ...card, evidence: card.evidenceSpanIds.flatMap((spanId) => { const evidence = bySpan.get(spanId); return evidence ? [evidence] : []; }) }));
       },
       async listCoverageGaps() {
         const rows = await options.driver.query<{
@@ -651,11 +871,14 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
           sql: `SELECT coverage.coverage_entry_id, reference.reference_work_id, reference.title AS reference_title,
                        analysis.analysis_project_id, coverage.analysis_unit_id, coverage.module, coverage.status,
                        coverage.reason, coverage.created_at
-                FROM coverage_entries coverage
+                FROM (
+                  SELECT entry.*, ROW_NUMBER() OVER (PARTITION BY entry.analysis_project_id, entry.module, COALESCE(entry.analysis_unit_id, '') ORDER BY entry.created_at DESC, entry.coverage_entry_id DESC) AS rn
+                  FROM coverage_entries entry
+                ) coverage
                 INNER JOIN analysis_projects analysis ON analysis.analysis_project_id = coverage.analysis_project_id
                 INNER JOIN source_editions edition ON edition.source_edition_id = analysis.source_edition_id
                 INNER JOIN reference_works reference ON reference.reference_work_id = edition.reference_work_id
-                WHERE coverage.status <> 'complete'
+                WHERE coverage.rn = 1 AND coverage.status <> 'complete'
                 ORDER BY coverage.created_at DESC, coverage.coverage_entry_id ASC
                 LIMIT 100`,
           params: [],
@@ -744,12 +967,19 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
               params: [analysis.analysis_project_id],
             }),
             options.driver.query<{ status: string; count: number }>({
-              sql: "SELECT status, COUNT(*) AS count FROM coverage_entries WHERE analysis_project_id = ? GROUP BY status ORDER BY status ASC",
+              sql: `SELECT status, COUNT(*) AS count FROM (
+                      SELECT entry.status, ROW_NUMBER() OVER (PARTITION BY entry.analysis_project_id, entry.module, COALESCE(entry.analysis_unit_id, '') ORDER BY entry.created_at DESC, entry.coverage_entry_id DESC) AS rn
+                      FROM coverage_entries entry WHERE entry.analysis_project_id = ?
+                    ) latest WHERE rn = 1 GROUP BY status ORDER BY status ASC`,
               params: [analysis.analysis_project_id],
             }),
             options.driver.query<{ coverage_entry_id: string; analysis_unit_id: string | null; module: string; status: string; reason: string }>({
               sql: `SELECT coverage_entry_id, analysis_unit_id, module, status, reason
-                    FROM coverage_entries WHERE analysis_project_id = ? AND status <> 'complete'
+                    FROM (
+                      SELECT entry.*, ROW_NUMBER() OVER (PARTITION BY entry.analysis_project_id, entry.module, COALESCE(entry.analysis_unit_id, '') ORDER BY entry.created_at DESC, entry.coverage_entry_id DESC) AS rn
+                      FROM coverage_entries entry WHERE entry.analysis_project_id = ?
+                    ) latest
+                    WHERE rn = 1 AND status <> 'complete'
                     ORDER BY created_at DESC, coverage_entry_id ASC LIMIT 50`,
               params: [analysis.analysis_project_id],
             }),
@@ -846,8 +1076,8 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
       },
       async listProviderProfiles() {
         const [profiles, routes] = await Promise.all([
-          options.driver.query<{ provider_profile_id: string; name: string; base_url: string; default_model: string; current_revision: number }>({
-            sql: "SELECT provider_profile_id, name, base_url, default_model, current_revision FROM provider_profiles ORDER BY name ASC, provider_profile_id ASC",
+          options.driver.query<{ provider_profile_id: string; name: string; base_url: string; default_model: string; payload_json: string; current_revision: number }>({
+            sql: "SELECT provider_profile_id, name, base_url, default_model, payload_json, current_revision FROM provider_profiles ORDER BY name ASC, provider_profile_id ASC",
             params: [],
           }),
           options.driver.query<{ provider_profile_id: string; role: string; model: string }>({
@@ -855,14 +1085,22 @@ export function createWorkspaceApplicationService(options: CreateWorkspaceApplic
             params: [],
           }),
         ]);
-        return profiles.map((profile) => ({
+        return profiles.map((profile) => {
+          const payload = providerProfilePayload(parseRecord(profile.payload_json, "Provider profile payload"));
+          if (!payload) throw new Error(`Provider ${profile.provider_profile_id} 配置损坏。`);
+          return ({
           providerProfileId: profile.provider_profile_id,
           name: profile.name,
           baseURL: profile.base_url,
+          protocol: payload.protocol,
           defaultModel: profile.default_model,
+          contextWindowTokens: payload.contextWindowTokens,
+          maxOutputTokens: payload.maxOutputTokens,
+          safetyMarginRatio: payload.safetyMarginRatio,
           revision: profile.current_revision,
           routes: routes.filter((route) => route.provider_profile_id === profile.provider_profile_id).map((route) => ({ role: route.role, model: route.model })),
-        }));
+          });
+        });
       },
       async getWorkspaceSettings() {
         const rows = await options.driver.query<{ payload_json: string; revision: number }>({
@@ -947,6 +1185,9 @@ function confirmationTargetSummary(tool: string, argsJson: string): string {
   const projectId = typeof args.projectId === "string" ? args.projectId : null;
   const chapterId = typeof args.chapterId === "string" ? args.chapterId : null;
   const referenceWorkId = typeof args.referenceWorkId === "string" ? args.referenceWorkId : null;
+  const providerProfileId = typeof args.providerProfileId === "string" ? args.providerProfileId : null;
+  const providerEndpoint = providerEndpointSummary(args.baseURL);
+  const confirmation = recordArg(args, "confirmationSummary");
   const sourceParts = typeof args.sourcePath === "string" ? args.sourcePath.replace(/\\/g, "/").split("/").filter(Boolean) : [];
   const sourcePath = sourceParts.length > 0 ? sourceParts[sourceParts.length - 1] : null;
   return [
@@ -954,8 +1195,47 @@ function confirmationTargetSummary(tool: string, argsJson: string): string {
     projectId ? `作品：${projectId}` : null,
     chapterId ? `章节：${chapterId}` : null,
     referenceWorkId ? `参考：${referenceWorkId}` : null,
+    providerProfileId ? `Provider：${providerProfileId}` : null,
+    providerEndpoint ? `端点：${providerEndpoint}` : null,
     sourcePath ? `文件：${sourcePath}` : null,
+    confirmation ? chapterProductionConfirmationSummary(confirmation) : null,
   ].filter((value): value is string => value !== null).join(" · ");
+}
+
+function chapterProductionConfirmationSummary(value: Record<string, unknown>): string | null {
+  const proposalId = typeof value.proposalId === "string" ? value.proposalId : null;
+  const draftDocumentId = typeof value.draftDocumentId === "string" ? value.draftDocumentId : null;
+  const outcomeId = typeof value.outcomeId === "string" ? value.outcomeId : null;
+  const continuity = recordArg(value, "continuity");
+  const method = recordArg(value, "method");
+  if (!proposalId || !draftDocumentId || !continuity) return null;
+  const canon = typeof continuity.canonPatchCount === "number" ? continuity.canonPatchCount : null;
+  const knowledge = typeof continuity.characterKnowledgePatchCount === "number" ? continuity.characterKnowledgePatchCount : null;
+  const promises = typeof continuity.readerPromiseUpdateCount === "number" ? continuity.readerPromiseUpdateCount : null;
+  if (canon === null || knowledge === null || promises === null) return null;
+  const methodSummary = method
+    ? chapterMethodConfirmationSummary(method)
+    : outcomeId ? `；本章应用结果：${outcomeId}` : "";
+  return `提交提案：${proposalId}；草稿：${draftDocumentId}${methodSummary}；连续性更新：Canon ${canon} 项、人物知识 ${knowledge} 项、ReaderPromise ${promises} 项、读者状态与大纲偏移各 1 项`;
+}
+
+function chapterMethodConfirmationSummary(value: Record<string, unknown>): string {
+  const applicationId = typeof value.applicationId === "string" ? value.applicationId : "当前采用记录";
+  const reviewId = typeof value.reviewId === "string" ? value.reviewId : "当前 Reviewer 反馈";
+  const outcomeId = typeof value.outcomeId === "string" ? value.outcomeId : "当前本章应用结果";
+  const disagreements = Array.isArray(value.humanDisagreements) ? value.humanDisagreements.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [];
+  const risk = typeof value.riskAcceptanceReason === "string" && value.riskAcceptanceReason.trim() ? `；带风险理由：${value.riskAcceptanceReason}` : "";
+  return `；采用记录：${applicationId}；Reviewer：${reviewId}；本章应用结果：${outcomeId}${disagreements.length > 0 ? `；人类不同意：${disagreements.join("；")}` : ""}${risk}`;
+}
+
+function providerEndpointSummary(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const endpoint = new URL(value);
+    return `${endpoint.protocol}//${endpoint.host}${endpoint.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return null;
+  }
 }
 
 function assertNonEmptyId(value: string, label: string): void {
@@ -978,10 +1258,19 @@ function createWorkspacePlanner(schemas: PayloadSchemaRegistry): CommandPlanner 
         if (!context.confirmed) return { kind: "needs_confirmation", risk: "reference_file_import", expiresAt: command.createdAt + 24 * 60 * 60 * 1000 };
         return planStartReferenceFileImport(command);
       }
-      if (command.tool === "save_provider_profile") return planSaveProviderProfile(command, schemas);
+      if (command.tool === "save_provider_profile") {
+        const planned = planSaveProviderProfile(command, schemas);
+        // Secret 以 providerProfileId 为键。若外部 Agent 可直接更新既有 profile，
+        // 它便能让下一次调用把该 Secret 发送到新的 endpoint。
+        if (!context.confirmed && command.expectedRevision !== undefined && command.expectedRevision !== null && planned.kind === "plan") {
+          return { kind: "needs_confirmation", risk: "provider_profile_update", expiresAt: command.createdAt + 24 * 60 * 60 * 1000 };
+        }
+        return planned;
+      }
       if (command.tool === "save_workspace_settings") return planSaveWorkspaceSettings(command, schemas);
       if (command.tool === "commit_pipeline_revision") return planCommitPipelineRevision(command);
       if (command.tool === "start_pipeline_run") return planStartPipelineRun(command);
+      if (command.tool === "bind_pipeline_run_task") return planBindPipelineRunTask(command);
       if (command.tool === "complete_pipeline_run_step") return planCompletePipelineRunStep(command);
       if (command.tool === "start_local_fact_extraction") return planStartLocalFactExtraction(command);
       if (command.tool === "start_local_fact_extraction_batch") return planStartLocalFactExtractionBatch(command);
@@ -990,12 +1279,12 @@ function createWorkspacePlanner(schemas: PayloadSchemaRegistry): CommandPlanner 
       if (command.tool === "commit_local_creation_draft") return planCommitLocalCreationDraft(command, schemas);
       if (command.tool === "import_reference_text") return planImportReferenceText(command);
       if (command.tool === "create_analysis_corpus") return planCreateAnalysisCorpus(command);
-      if (command.tool === "commit_analysis_facts") return planCommitAnalysisFacts(command, schemas);
-      if (command.tool === "commit_thread_graph") return planCommitThreadGraph(command, schemas);
-      if (command.tool === "commit_analysis_brief") return planCommitAnalysisBrief(command);
-      if (command.tool === "approve_analysis_brief") return planApproveAnalysisBrief(command);
-      if (command.tool === "commit_research_conclusions") return planCommitResearchConclusions(command, schemas);
-      if (command.tool === "commit_independent_falsification") return planCommitIndependentFalsification(command, schemas);
+      if (command.tool === "commit_analysis_facts") return withDossierInvalidation(planCommitAnalysisFacts(command, schemas), command);
+      if (command.tool === "commit_thread_graph") return withDossierInvalidation(planCommitThreadGraph(command, schemas), command);
+      if (command.tool === "commit_analysis_brief") return withDossierInvalidation(planCommitAnalysisBrief(command), command);
+      if (command.tool === "approve_analysis_brief") return withDossierInvalidation(planApproveAnalysisBrief(command), command);
+      if (command.tool === "commit_research_conclusions") return withDossierInvalidation(planCommitResearchConclusions(command, schemas), command);
+      if (command.tool === "commit_independent_falsification") return withDossierInvalidation(planCommitIndependentFalsification(command, schemas), command);
       if (command.tool === "commit_research_dossier") return planCommitResearchDossier(command);
       if (command.tool === "commit_mechanism_candidate") return planCommitMechanismCandidate(command, schemas);
       if (command.tool === "review_mechanism_asset") {
@@ -1003,7 +1292,7 @@ function createWorkspacePlanner(schemas: PayloadSchemaRegistry): CommandPlanner 
         return planReviewMechanismAsset(command, schemas);
       }
       if (command.tool === "commit_chapter_production") {
-        if (command.actor.kind === "human_via_agent" && !context.confirmed) return { kind: "needs_confirmation", risk: "chapter_production_commit", expiresAt: command.createdAt + 24 * 60 * 60 * 1000 };
+        if ((command.actor.kind === "human" || command.actor.kind === "human_via_agent") && !context.confirmed) return { kind: "needs_confirmation", risk: "chapter_production_commit", expiresAt: command.createdAt + 24 * 60 * 60 * 1000 };
         return planCommitChapterProduction(command, schemas);
       }
       if (command.tool === "commit_project_planning_document") {
@@ -1018,8 +1307,8 @@ function createWorkspacePlanner(schemas: PayloadSchemaRegistry): CommandPlanner 
         }
         return planCommitProjectPlanningDocument(command, schemas);
       }
-      if (command.tool === "fail_local_fact_extraction") return planFailLocalFactExtraction(command);
-      if (command.tool === "commit_structural_reading_map") return planCommitStructuralReadingMap(command, schemas);
+      if (command.tool === "fail_local_fact_extraction") return withDossierInvalidation(planFailLocalFactExtraction(command), command);
+      if (command.tool === "commit_structural_reading_map") return withDossierInvalidation(planCommitStructuralReadingMap(command, schemas), command);
       if (command.tool !== "create_novel_project") return { kind: "blocked", diagnostics: [{ code: "unsupported_tool", message: `暂不支持命令：${command.tool}` }] };
       const projectId = stringArg(command.args, "projectId");
       const title = stringArg(command.args, "title");
@@ -1062,6 +1351,18 @@ function isReviewablePlanningKind(kind: unknown): boolean {
   return typeof kind === "string" && ["story_concepts", "story_contract", "story_system", "book_outline", "stage_plan", "chapter_contract"].includes(kind);
 }
 
+function withDossierInvalidation(plan: PlannedCommand, command: CommandEnvelope): PlannedCommand {
+  const analysisProjectId = stringArg(command.args, "analysisProjectId");
+  if (plan.kind !== "plan" || !analysisProjectId) return plan;
+  return {
+    ...plan,
+    steps: [
+      { sql: "UPDATE research_dossiers SET stale = 1 WHERE analysis_project_id = ? AND stale = 0", params: [analysisProjectId], expectAffectedRows: { min: 0 } },
+      ...plan.steps,
+    ],
+  };
+}
+
 function planCommitPipelineRevision(command: CommandEnvelope): PlannedCommand {
   const pipelineId = stringArg(command.args, "pipelineId");
   const name = stringArg(command.args, "name");
@@ -1070,14 +1371,19 @@ function planCommitPipelineRevision(command: CommandEnvelope): PlannedCommand {
   const expected = command.args.expectedRevision;
   if (!pipelineId || !name || !steps || steps.length === 0 || steps.length > 32 || (expected !== null && expected !== undefined && (!Number.isInteger(expected) || Number(expected) < 1))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRevision 参数非法。" }] };
   const ids = new Set<string>();
+  const dependencies = new Map<string, string[]>();
   for (const step of steps) {
     if (!step || typeof step !== "object" || Array.isArray(step)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRevision 步骤必须是对象。" }] };
     const value = step as Record<string, unknown>;
     const id = typeof value.id === "string" ? value.id.trim() : "";
     const tool = typeof value.tool === "string" ? value.tool.trim() : "";
-    if (!id || !tool || ids.has(id) || !PIPELINE_DOMAIN_TOOLS.has(tool) || containsSecretField(value.config)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRevision 包含重复、空、Secret、未登记或越权步骤。" }] };
+    const dependsOn = value.dependsOn;
+    if (!id || !tool || ids.has(id) || !PIPELINE_DOMAIN_TOOLS.has(tool) || !isPipelineStepExecution(value.execution) || !Array.isArray(dependsOn) || dependsOn.some((dependency) => typeof dependency !== "string" || !dependency.trim()) || containsSecretField(value.config)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRevision 包含重复、空、非法 execution、依赖、Secret、未登记或越权步骤。" }] };
     ids.add(id);
+    dependencies.set(id, dependsOn as string[]);
   }
+  if ([...dependencies].some(([id, dependsOn]) => new Set(dependsOn).size !== dependsOn.length || dependsOn.includes(id) || dependsOn.some((dependency) => !ids.has(dependency)))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRevision 含不存在、重复或自依赖步骤。" }] };
+  if (pipelineDependenciesHaveCycle(dependencies)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRevision 存在循环依赖。" }] };
   const expectedRevision = expected === null || expected === undefined ? null : Number(expected);
   const revision = expectedRevision === null ? 1 : expectedRevision + 1;
   const payload = { schema_version: 1, kind: "pipeline_revision", steps };
@@ -1100,22 +1406,30 @@ function planStartPipelineRun(command: CommandEnvelope): PlannedCommand {
   const steps = Array.isArray(command.args.steps) ? command.args.steps : null;
   if (!runId || !pipelineId || !Number.isInteger(pipelineRevision) || Number(pipelineRevision) < 1 || !steps || steps.length === 0 || steps.length > 32 || (projectId === undefined)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 参数非法。" }] };
   const ids = new Set<string>();
+  const dependencies = new Map<string, string[]>();
   for (const step of steps) {
     if (!step || typeof step !== "object" || Array.isArray(step)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 步骤必须是对象。" }] };
     const value = step as Record<string, unknown>;
     const id = typeof value.id === "string" ? value.id.trim() : "";
     const tool = typeof value.tool === "string" ? value.tool.trim() : "";
-    if (!id || !tool || typeof value.enabled !== "boolean" || ids.has(id) || !PIPELINE_DOMAIN_TOOLS.has(tool) || containsSecretField(value.config)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 含非法、Secret、未登记或越权步骤。" }] };
+    const dependsOn = value.dependsOn;
+    if (!id || !tool || typeof value.enabled !== "boolean" || ids.has(id) || !PIPELINE_DOMAIN_TOOLS.has(tool) || !isPipelineStepExecution(value.execution) || !Array.isArray(dependsOn) || dependsOn.some((dependency) => typeof dependency !== "string" || !dependency.trim()) || containsSecretField(value.config)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 含非法 execution、依赖、Secret、未登记或越权步骤。" }] };
     ids.add(id);
+    dependencies.set(id, dependsOn as string[]);
   }
+  if ([...dependencies].some(([id, dependsOn]) => new Set(dependsOn).size !== dependsOn.length || dependsOn.includes(id) || dependsOn.some((dependency) => !ids.has(dependency)))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 含不存在、重复或自依赖步骤。" }] };
+  if (pipelineDependenciesHaveCycle(dependencies)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 存在循环依赖。" }] };
+  const routeSnapshots = command.args.routeSnapshots;
+  if (routeSnapshots !== undefined && (!routeSnapshots || typeof routeSnapshots !== "object" || Array.isArray(routeSnapshots) || containsSecretField(routeSnapshots))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun 路由快照非法或包含 Secret。" }] };
   const revision = Number(pipelineRevision);
   const snapshotId = `pipeline_snapshot:${runId}`;
-  const payload = JSON.stringify({ schema_version: 1, kind: "pipeline_run_snapshot", steps });
+  const payload = JSON.stringify({ schema_version: 1, kind: "pipeline_run_snapshot", steps, routeSnapshots: routeSnapshots ?? {} });
   const nodeSteps: TransactionStep[] = steps.map((step) => {
     const value = step as Record<string, unknown>;
     const nodeId = String(value.id).trim();
     const enabled = value.enabled === true;
-    return { sql: "INSERT INTO run_nodes (run_id, node_id, status, output_object_hash, checkpoint_json, started_at, completed_at) VALUES (?, ?, ?, NULL, NULL, NULL, ?)", params: [runId, nodeId, enabled ? "pending" : "skipped", enabled ? null : command.createdAt], expectAffectedRows: { min: 1, max: 1 } };
+    const execution = value.execution as "executable" | "agent_action" | "human_review";
+    return { sql: "INSERT INTO run_nodes (run_id, node_id, execution, task_id, status, output_object_hash, checkpoint_json, started_at, completed_at) VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?)", params: [runId, nodeId, execution, enabled ? "pending" : "skipped", enabled ? null : command.createdAt], expectAffectedRows: { min: 1, max: 1 } };
   });
   return {
     kind: "plan",
@@ -1130,6 +1444,32 @@ function planStartPipelineRun(command: CommandEnvelope): PlannedCommand {
   };
 }
 
+function planBindPipelineRunTask(command: CommandEnvelope): PlannedCommand {
+  const runId = stringArg(command.args, "runId");
+  const stepId = stringArg(command.args, "stepId");
+  const taskId = stringArg(command.args, "taskId");
+  if (!runId || !stepId || !taskId || command.actor.kind !== "internal_agent") {
+    return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "PipelineRun task 绑定参数或 actor 非法。" }] };
+  }
+  return {
+    kind: "plan",
+    steps: [
+      {
+        sql: "UPDATE run_nodes SET task_id = ?, started_at = COALESCE(started_at, ?) WHERE run_id = ? AND node_id = ? AND status = 'pending' AND task_id IS NULL AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?)",
+        params: [taskId, command.createdAt, runId, stepId, taskId],
+        expectAffectedRows: { min: 1, max: 1 },
+      },
+      {
+        sql: "INSERT INTO run_events (event_id, run_id, node_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'task_bound', ?, ?)",
+        params: [`pipeline_task_bound:${runId}:${stepId}`, runId, stepId, JSON.stringify({ schema_version: 1, taskId }), command.createdAt],
+        expectAffectedRows: { min: 1, max: 1 },
+      },
+    ],
+    result: { kind: "ok", resourceRefs: [{ type: "pipeline_run", id: runId }, { type: "task", id: taskId }] },
+    changes: [{ topic: "pipeline_runs", resourceType: "pipeline_run", resourceId: runId }],
+  };
+}
+
 function planCompletePipelineRunStep(command: CommandEnvelope): PlannedCommand {
   const runId = stringArg(command.args, "runId");
   const stepId = stringArg(command.args, "stepId");
@@ -1139,7 +1479,7 @@ function planCompletePipelineRunStep(command: CommandEnvelope): PlannedCommand {
   return {
     kind: "plan",
     steps: [
-      { sql: "UPDATE run_nodes SET status = 'completed', checkpoint_json = ?, completed_at = ? WHERE run_id = ? AND node_id = ? AND status = 'pending'", params: [checkpoint, command.createdAt, runId, stepId], expectAffectedRows: { min: 1, max: 1 } },
+      { sql: "UPDATE run_nodes SET status = 'completed', output_object_hash = COALESCE((SELECT output_object_hash FROM tasks WHERE task_id = run_nodes.task_id), output_object_hash), checkpoint_json = ?, completed_at = ? WHERE run_id = ? AND node_id = ? AND status = 'pending' AND (execution <> 'executable' OR (task_id IS NOT NULL AND EXISTS (SELECT 1 FROM tasks WHERE task_id = run_nodes.task_id AND status = 'succeeded'))) AND NOT EXISTS (SELECT 1 FROM runs run INNER JOIN run_snapshots snapshot ON snapshot.snapshot_id = run.snapshot_id INNER JOIN json_each(snapshot.payload_json, '$.steps') step INNER JOIN json_each(step.value, '$.dependsOn') dependency LEFT JOIN run_nodes prerequisite ON prerequisite.run_id = run_nodes.run_id AND prerequisite.node_id = dependency.value WHERE run.run_id = run_nodes.run_id AND json_extract(step.value, '$.id') = run_nodes.node_id AND COALESCE(prerequisite.status, 'pending') <> 'completed')", params: [checkpoint, command.createdAt, runId, stepId], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "UPDATE runs SET status = CASE WHEN NOT EXISTS (SELECT 1 FROM run_nodes WHERE run_id = ? AND status = 'pending') THEN 'completed' ELSE 'waiting_human' END, updated_at = ? WHERE run_id = ? AND status = 'waiting_human'", params: [runId, command.createdAt, runId], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "INSERT INTO run_events (event_id, run_id, node_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'human_step_completed', ?, ?)", params: [`pipeline_run_step:${command.commandId}`, runId, stepId, checkpoint, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
     ],
@@ -1154,16 +1494,52 @@ function containsSecretField(value: unknown): boolean {
   return Object.entries(value as Record<string, unknown>).some(([key, nested]) => SECRET_FIELD_PATTERN.test(key) || containsSecretField(nested));
 }
 
+function pipelineDependenciesHaveCycle(dependencies: ReadonlyMap<string, readonly string[]>): boolean {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const dependency of dependencies.get(id) ?? []) if (visit(dependency)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  return [...dependencies.keys()].some(visit);
+}
+
+function parseArtifactDependencies(value: unknown): Array<{ artifactId: string; revision: number }> | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 32) return null;
+  const result: Array<{ artifactId: string; revision: number }> = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const item = candidate as Record<string, unknown>;
+    if (typeof item.artifactId !== "string" || !item.artifactId.trim() || !Number.isInteger(item.revision) || Number(item.revision) < 1) return null;
+    result.push({ artifactId: item.artifactId.trim(), revision: Number(item.revision) });
+  }
+  return new Set(result.map((item) => `${item.artifactId}:${item.revision}`)).size === result.length ? result : null;
+}
+
+function isPipelineStepExecution(value: unknown): value is "executable" | "agent_action" | "human_review" {
+  return value === "executable" || value === "agent_action" || value === "human_review";
+}
+
 function planSaveProviderProfile(command: CommandEnvelope, schemas: PayloadSchemaRegistry): PlannedCommand {
   if (Object.keys(command.args).some((key) => SECRET_FIELD_PATTERN.test(key))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "Provider 配置命令不得携带 API Key 或 Secret 字段。" }] };
   const providerProfileId = stringArg(command.args, "providerProfileId");
   const name = stringArg(command.args, "name");
   const baseURL = stringArg(command.args, "baseURL");
+  const protocol = command.args.protocol;
   const defaultModel = stringArg(command.args, "defaultModel");
+  const contextWindowTokens = command.args.contextWindowTokens;
+  const maxOutputTokens = command.args.maxOutputTokens;
+  const safetyMarginRatio = command.args.safetyMarginRatio;
   const routes = providerRoutes(command.args.routes);
-  if (!providerProfileId || !name || !baseURL || !defaultModel || !routes) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "save_provider_profile 需要合法的非秘密 Provider 字段与角色路由。" }] };
-  if (!validProviderURL(baseURL)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "Provider baseURL 必须是 http(s) URL；DeepSeek 地址必须包含 /v1。" }] };
-  const payload = { schema_version: 1, kind: "provider_profile", name, baseURL, defaultModel, routes };
+  const payload = providerProfilePayload({ schema_version: 1, kind: "provider_profile", name, baseURL, protocol, defaultModel, contextWindowTokens, maxOutputTokens, safetyMarginRatio, routes });
+  if (!providerProfileId || !payload || !routes) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "save_provider_profile 需要合法的协议、模型预算与角色路由。" }] };
+  if (!validProviderURL(payload.baseURL, payload.protocol)) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "Provider baseURL 与所选协议不匹配。" }] };
   if (!schemas.validate("provider_profile", payload).ok) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "Provider profile payload schema 无效。" }] };
   const artifactId = `settings:provider:${providerProfileId}`;
   const create = command.expectedRevision === undefined || command.expectedRevision === null;
@@ -1205,13 +1581,30 @@ function providerRoutes(value: unknown): Array<{ role: string; model: string }> 
   return routes.every((route) => route.role && route.model) && new Set(routes.map((route) => route.role)).size === routes.length ? routes.sort((left, right) => left.role.localeCompare(right.role)) : null;
 }
 
-function validProviderURL(value: string): boolean {
+function validProviderURL(value: string, protocol: ProviderProfileView["protocol"]): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
     if (url.username || url.password || url.search || url.hash) return false;
-    return !/deepseek/i.test(url.hostname) || /\/v1\/?$/.test(url.pathname);
+    const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname.toLowerCase());
+    if (protocol === "ollama_native") return loopback && url.protocol === "http:" && /^\/?$/.test(url.pathname);
+    if (!( /^\/?$/.test(url.pathname) || /\/v1\/?$/.test(url.pathname) )) return false;
+    // 本地模型调用器只支持回环 HTTP；所有会带运行时 Secret 的远程请求
+    // 必须使用 TLS，不能仅靠人工确认来接受明文传输。
+    if (loopback && protocol === "responses") return false;
+    return loopback ? url.protocol === "http:" : url.protocol === "https:";
   } catch { return false; }
+}
+
+function providerProfilePayload(value: Record<string, unknown>): Omit<ProviderProfileView, "providerProfileId" | "revision" | "routes"> & { schema_version: 1; kind: "provider_profile"; routes: Array<{ role: string; model: string }> } | null {
+  const routes = providerRoutes(value.routes);
+  if (value.schema_version !== 1 || value.kind !== "provider_profile" || typeof value.name !== "string" || !value.name.trim() || typeof value.baseURL !== "string" || !value.baseURL.trim()
+    || (value.protocol !== "chat_completions" && value.protocol !== "responses" && value.protocol !== "ollama_native")
+    || typeof value.defaultModel !== "string" || !value.defaultModel.trim() || !routes
+    || !Number.isInteger(value.contextWindowTokens) || (value.contextWindowTokens as number) < 1024 || (value.contextWindowTokens as number) > 1_000_000
+    || !Number.isInteger(value.maxOutputTokens) || (value.maxOutputTokens as number) < 256 || (value.maxOutputTokens as number) >= (value.contextWindowTokens as number)
+    || typeof value.safetyMarginRatio !== "number" || value.safetyMarginRatio < 0 || value.safetyMarginRatio >= 1) return null;
+  return { schema_version: 1, kind: "provider_profile", name: value.name.trim(), baseURL: value.baseURL.trim(), protocol: value.protocol, defaultModel: value.defaultModel.trim(), contextWindowTokens: value.contextWindowTokens as number, maxOutputTokens: value.maxOutputTokens as number, safetyMarginRatio: value.safetyMarginRatio, routes };
 }
 
 /** 工作区设置始终是非秘密、可由所有宿主读取的路由/预算策略。 */
@@ -1657,7 +2050,7 @@ function planCommitResearchDossier(command: CommandEnvelope): PlannedCommand {
         params: [payload.sha256, payload.byteLength, payload.mediaType, command.createdAt, command.createdAt],
       },
       {
-        sql: "INSERT INTO research_dossiers (dossier_id, analysis_project_id, revision, payload_object_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+        sql: "INSERT INTO research_dossiers (dossier_id, analysis_project_id, revision, payload_object_hash, stale, created_at) VALUES (?, ?, ?, ?, 0, ?)",
         params: [dossierId, analysisProjectId, revision as number, payload.sha256, command.createdAt],
         expectAffectedRows: { min: 1, max: 1 },
       },
@@ -1676,11 +2069,14 @@ function planCommitMechanismCandidate(command: CommandEnvelope, schemas: Payload
   if (!analysisProjectId || !mechanismAssetId || !rawOutput || !neutralExample || !payload || payload.card.id !== mechanismAssetId || payload.rawOutputObjectHash !== rawOutput.sha256 || !schemas.validate("mechanism_asset", payload).ok) {
     return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "commit_mechanism_candidate 缺少合法分析项目、机制卡或对象引用。" }] };
   }
+  const artifactId = `mechanism:${mechanismAssetId}`;
   return {
     kind: "plan",
     steps: [
       { sql: "INSERT INTO objects (sha256, byte_length, media_type, created_at, verified_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING", params: [rawOutput.sha256, rawOutput.byteLength, rawOutput.mediaType, command.createdAt, command.createdAt] },
       { sql: "INSERT INTO objects (sha256, byte_length, media_type, created_at, verified_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING", params: [neutralExample.sha256, neutralExample.byteLength, neutralExample.mediaType, command.createdAt, command.createdAt] },
+      { sql: "INSERT INTO artifacts (artifact_id, project_id, artifact_type, current_revision, status, created_at, updated_at) VALUES (?, NULL, 'mechanism_asset', 1, 'candidate', ?, ?)", params: [artifactId, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
+      { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, 1, NULL, ?, ?, ?, ?)", params: [artifactId, JSON.stringify(payload), neutralExample.sha256, JSON.stringify(command.actor), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "INSERT INTO mechanism_assets (mechanism_asset_id, analysis_project_id, status, current_revision, created_at, updated_at) VALUES (?, ?, 'candidate', 1, ?, ?)", params: [mechanismAssetId, analysisProjectId, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "INSERT INTO mechanism_asset_revisions (mechanism_asset_id, revision, payload_json, neutral_example_object_hash, created_at) VALUES (?, 1, ?, ?, ?)", params: [mechanismAssetId, JSON.stringify(payload), neutralExample.sha256, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
     ],
@@ -1701,9 +2097,13 @@ function planReviewMechanismAsset(command: CommandEnvelope, schemas: PayloadSche
     return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "review_mechanism_asset 缺少合法机制、采纳状态或 expectedRevision。" }] };
   }
   const nextRevision = (expectedRevision as number) + 1;
+  const artifactId = `mechanism:${mechanismAssetId}`;
   return {
     kind: "plan",
     steps: [
+      { sql: "UPDATE artifact_dependencies SET stale = 1 WHERE depends_on_artifact_id = ? AND depends_on_revision <> ?", params: [artifactId, nextRevision], expectAffectedRows: { min: 0 } },
+      { sql: "UPDATE artifacts SET status = ?, current_revision = ?, updated_at = ? WHERE artifact_id = ? AND current_revision = ?", params: [nextStatus!, nextRevision, command.createdAt, artifactId, expectedRevision as number], expectAffectedRows: { min: 1, max: 1 } },
+      { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", params: [artifactId, nextRevision, expectedRevision as number, JSON.stringify(payload), neutralExampleObjectHash!, JSON.stringify(command.actor), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "UPDATE mechanism_assets SET status = ?, current_revision = ?, updated_at = ? WHERE mechanism_asset_id = ? AND current_revision = ?", params: [nextStatus!, nextRevision, command.createdAt, mechanismAssetId!, expectedRevision as number], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "INSERT INTO mechanism_asset_revisions (mechanism_asset_id, revision, payload_json, neutral_example_object_hash, created_at) VALUES (?, ?, ?, ?, ?)", params: [mechanismAssetId!, nextRevision, JSON.stringify(payload), neutralExampleObjectHash!, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "INSERT INTO mechanism_adoptions (adoption_id, mechanism_asset_id, project_id, status, actor_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", params: [`adoption:${mechanismAssetId!}:${projectId!}:${command.commandId}`, mechanismAssetId!, projectId!, reviewStatus!, JSON.stringify(command.actor), command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
@@ -1718,7 +2118,8 @@ function planCommitProjectPlanningDocument(command: CommandEnvelope, schemas: Pa
   const payload = recordArg(command.args, "payload"); const raw = command.args.rawOutput === undefined ? null : objectReferenceFrom(command.args.rawOutput);
   const content = command.args.contentObject === undefined ? raw : objectReferenceFrom(command.args.contentObject);
   const expected = command.args.expectedRevision;
-  if (!projectId || !documentId || !documentType || !status || !payload || !schemas.validate("project_document", payload).ok || (command.args.rawOutput !== undefined && !raw) || (command.args.contentObject !== undefined && !content) || (expected !== null && (!Number.isInteger(expected) || (expected as number) < 1))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "commit_project_planning_document 参数无效。" }] };
+  const dependencies = parseArtifactDependencies(command.args.dependencies);
+  if (!projectId || !documentId || !documentType || !status || !payload || !dependencies || !schemas.validate("project_document", payload).ok || (command.args.rawOutput !== undefined && !raw) || (command.args.contentObject !== undefined && !content) || (expected !== null && (!Number.isInteger(expected) || (expected as number) < 1))) return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "commit_project_planning_document 参数无效。" }] };
   const artifactId = `document:${documentId}`;
   const create = expected === null;
   const revision = create ? 1 : (expected as number) + 1;
@@ -1729,17 +2130,24 @@ function planCommitProjectPlanningDocument(command: CommandEnvelope, schemas: Pa
       { sql: "INSERT INTO artifacts (artifact_id, project_id, artifact_type, current_revision, status, created_at, updated_at) VALUES (?, ?, 'project_document', 1, ?, ?, ?)", params: [artifactId, projectId, status, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "INSERT INTO project_documents (document_id, project_id, chapter_id, document_type, status, artifact_id, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)", params: [documentId, projectId, documentType, status, artifactId, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
     ] : [
+      { sql: "UPDATE artifact_dependencies SET stale = 1 WHERE depends_on_artifact_id = ? AND depends_on_revision <> ?", params: [artifactId, revision], expectAffectedRows: { min: 0 } },
       { sql: "UPDATE artifacts SET status = ?, current_revision = ?, updated_at = ? WHERE artifact_id = ? AND current_revision = ?", params: [status, revision, command.createdAt, artifactId, expected as number], expectAffectedRows: { min: 1, max: 1 } },
       { sql: "UPDATE project_documents SET status = ?, updated_at = ? WHERE document_id = ?", params: [status, command.createdAt, documentId], expectAffectedRows: { min: 1, max: 1 } },
     ]),
     { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", params: [artifactId, revision, create ? null : expected as number, JSON.stringify(payload), content?.sha256 ?? raw?.sha256 ?? null, JSON.stringify(command.actor), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
+    ...dependencies.map((dependency) => ({
+      sql: "INSERT INTO artifact_dependencies (artifact_id, revision, depends_on_artifact_id, depends_on_revision, stale) SELECT ?, ?, ?, ?, 0 WHERE EXISTS (SELECT 1 FROM artifacts WHERE artifact_id = ? AND current_revision = ?)",
+      params: [artifactId, revision, dependency.artifactId, dependency.revision, dependency.artifactId, dependency.revision],
+      expectAffectedRows: { min: 1, max: 1 },
+    })),
   ];
   return { kind: "plan", steps, result: { kind: "ok", revision, resourceRefs: [{ type: "project_document", id: documentId }] }, changes: [{ topic: "projects", resourceType: "project_document", resourceId: documentId, revision }] };
 }
 
 interface PlannedRevisionPatch { id: string; expectedRevision: number | null; payload: Record<string, unknown>; characterId?: string; }
-interface PlannedReaderPromise { id: string; status: string; payload: Record<string, unknown>; }
-interface PlannedSelectedDraft { documentId: string; revision: "v1" | "v2" | "v3"; model: string; reviewLineage: string[]; }
+interface PlannedReaderPromise { id: string; expectedRevision: number | null; status: string; payload: Record<string, unknown>; }
+interface PlannedSelectedDraft { documentId: string; revision: "v1" | "v2" | "v3"; model: string; executionRef: string; reviewLineage: string[]; }
+interface PlannedMethodOutcome { outcomeId: string; outcomeRevision: number; applicationId: string; applicationRevision: number; reviewId: string; reviewRevision: number; }
 
 function planCommitChapterProduction(command: CommandEnvelope, schemas: PayloadSchemaRegistry): PlannedCommand {
   const projectId = stringArg(command.args, "projectId");
@@ -1751,6 +2159,8 @@ function planCommitChapterProduction(command: CommandEnvelope, schemas: PayloadS
   const manifestObject = objectReferenceArgs(command.args, "manifestObject");
   const textObject = objectReferenceArgs(command.args, "textObject");
   const selectedDraft = plannedSelectedDraft(command.args.selectedDraft);
+  const methodOutcome = plannedMethodOutcome(command.args.methodOutcome);
+  const runId = command.args.runId;
   const expectedChapterRevision = command.args.expectedChapterRevision;
   const expectedTextRevision = command.args.expectedTextRevision;
   const chapterDelta = recordArg(command.args, "chapterDelta");
@@ -1761,9 +2171,10 @@ function planCommitChapterProduction(command: CommandEnvelope, schemas: PayloadS
   const promiseUpdates = plannedReaderPromises(command.args.readerPromiseUpdates, schemas);
   const expectedValid = (value: unknown): value is number | null => value === null || (Number.isInteger(value) && (value as number) >= 1);
   const readerStateId = readerState && stringArg(readerState, "readerStateId");
+  const readerStateExpected = readerState?.expectedRevision === undefined ? null : readerState.expectedRevision;
   const readerStatePayload = readerState && recordArg(readerState, "payload");
   const outlinePayload = outlineDrift && recordArg(outlineDrift, "payload");
-  if (!projectId || !chapterId || !title || !productionCommitId || !manifestId || !manifestObject || !textObject || !selectedDraft || !Number.isInteger(chapterOrdinal) || (chapterOrdinal as number) < 1 || !expectedValid(expectedChapterRevision) || !expectedValid(expectedTextRevision) || ((expectedChapterRevision === null) !== (expectedTextRevision === null)) || !chapterDelta || !schemas.validate("project_document", chapterDelta).ok || !readerStateId || !readerStatePayload || !schemas.validate("reader_state", readerStatePayload).ok || !outlinePayload || !schemas.validate("project_document", outlinePayload).ok || !canonPatches || !knowledgePatches || !promiseUpdates) {
+  if (!projectId || !chapterId || !title || !productionCommitId || !manifestId || !manifestObject || !textObject || !selectedDraft || methodOutcome === undefined || (runId !== null && (typeof runId !== "string" || !runId.trim())) || !Number.isInteger(chapterOrdinal) || (chapterOrdinal as number) < 1 || !expectedValid(expectedChapterRevision) || !expectedValid(expectedTextRevision) || ((expectedChapterRevision === null) !== (expectedTextRevision === null)) || !expectedValid(readerStateExpected) || !chapterDelta || !schemas.validate("project_document", chapterDelta).ok || !readerStateId || !readerStatePayload || !schemas.validate("reader_state", readerStatePayload).ok || !outlinePayload || !schemas.validate("project_document", outlinePayload).ok || !canonPatches || !knowledgePatches || !promiseUpdates) {
     return { kind: "blocked", diagnostics: [{ code: "invalid_args", message: "commit_chapter_production 参数无效。" }] };
   }
   const create = expectedChapterRevision === null;
@@ -1773,8 +2184,15 @@ function planCommitChapterProduction(command: CommandEnvelope, schemas: PayloadS
   const textArtifactId = `document:${textDocumentId}`;
   const outlineDocumentId = `production:outline_drift:${chapterId}:${productionCommitId}`;
   const outlineArtifactId = `document:${outlineDocumentId}`;
-  const chapterTextPayload = { schema_version: 1, kind: "chapter_text", chapterId, title, manifestId, productionCommitId, selectedDraft, chapterDelta };
+  const lineage = { schema_version: 1, selectedDraftDocumentId: selectedDraft.documentId, selectedDraftRevision: selectedDraft.revision, selectedDraftExecutionRef: selectedDraft.executionRef, manifestId, reviewIds: selectedDraft.reviewLineage, model: selectedDraft.model, runId: runId as string | null, methodOutcome };
+  const chapterTextPayload = { schema_version: 1, kind: "chapter_text", chapterId, title, manifestId, productionCommitId, selectedDraft, lineage, chapterDelta };
   const steps = [
+    ...(methodOutcome ? [
+      ...[ [methodOutcome.applicationId, methodOutcome.applicationRevision], [`production:chapter_review:${methodOutcome.reviewId}`, methodOutcome.reviewRevision], [`production:chapter_mechanism_outcome:${chapterId}`, methodOutcome.outcomeRevision] ].map(([documentId, revision]) => ({
+        sql: "UPDATE artifacts SET updated_at = updated_at WHERE artifact_id = ? AND project_id = ? AND current_revision = ? AND NOT EXISTS (SELECT 1 FROM artifact_dependencies dep WHERE dep.artifact_id = artifacts.artifact_id AND dep.revision = artifacts.current_revision AND dep.stale = 1)",
+        params: [`document:${documentId}`, projectId, revision], expectAffectedRows: { min: 1, max: 1 },
+      })),
+    ] : []),
     { sql: "INSERT INTO objects (sha256, byte_length, media_type, created_at, verified_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING", params: [manifestObject.sha256, manifestObject.byteLength, manifestObject.mediaType, command.createdAt, command.createdAt] },
     { sql: "INSERT INTO objects (sha256, byte_length, media_type, created_at, verified_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING", params: [textObject.sha256, textObject.byteLength, textObject.mediaType, command.createdAt, command.createdAt] },
     ...(create ? [
@@ -1795,12 +2213,16 @@ function planCommitChapterProduction(command: CommandEnvelope, schemas: PayloadS
       : [{ sql: "UPDATE character_knowledge SET character_id = ?, payload_json = ?, revision = ?, updated_at = ? WHERE knowledge_id = ? AND project_id = ? AND revision = ?", params: [patch.characterId!, JSON.stringify(patch.payload), patch.expectedRevision + 1, command.createdAt, patch.id, projectId, patch.expectedRevision], expectAffectedRows: { min: 1, max: 1 } }]),
     // ReaderState/Promise 是项目跨章连续状态；同一 ID 的后续章节必须推进 revision，
     // 而不是 INSERT 冲突或把第 1 章状态隔离在下一章不可见的位置。
-    { sql: "INSERT INTO reader_states (reader_state_id, project_id, chapter_id, payload_json, revision, created_at) VALUES (?, ?, ?, ?, 1, ?) ON CONFLICT(reader_state_id) DO UPDATE SET project_id = excluded.project_id, chapter_id = excluded.chapter_id, payload_json = excluded.payload_json, revision = reader_states.revision + 1", params: [readerStateId, projectId, chapterId, JSON.stringify(readerStatePayload), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
-    ...promiseUpdates.map((patch) => ({ sql: "INSERT INTO reader_promises (reader_promise_id, project_id, chapter_id, payload_json, status, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(reader_promise_id) DO UPDATE SET project_id = excluded.project_id, chapter_id = excluded.chapter_id, payload_json = excluded.payload_json, status = excluded.status, revision = reader_promises.revision + 1, updated_at = excluded.updated_at", params: [patch.id, projectId, chapterId, JSON.stringify(patch.payload), patch.status, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } })),
+    ...(readerStateExpected === null
+      ? [{ sql: "INSERT INTO reader_states (project_id, reader_state_id, chapter_id, payload_json, revision, created_at) VALUES (?, ?, ?, ?, 1, ?)", params: [projectId, readerStateId, chapterId, JSON.stringify(readerStatePayload), command.createdAt], expectAffectedRows: { min: 1, max: 1 } }]
+      : [{ sql: "UPDATE reader_states SET chapter_id = ?, payload_json = ?, revision = ?, created_at = ? WHERE project_id = ? AND reader_state_id = ? AND revision = ?", params: [chapterId, JSON.stringify(readerStatePayload), (readerStateExpected as number) + 1, command.createdAt, projectId, readerStateId, readerStateExpected as number], expectAffectedRows: { min: 1, max: 1 } }]),
+    ...promiseUpdates.map((patch) => patch.expectedRevision === null
+      ? { sql: "INSERT INTO reader_promises (project_id, reader_promise_id, chapter_id, payload_json, status, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)", params: [projectId, patch.id, chapterId, JSON.stringify(patch.payload), patch.status, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } }
+      : { sql: "UPDATE reader_promises SET chapter_id = ?, payload_json = ?, status = ?, revision = ?, updated_at = ? WHERE project_id = ? AND reader_promise_id = ? AND revision = ? AND ((status IN ('establish','reinforce','delay') AND ? IN ('reinforce','delay','payoff','transform')) OR (status = 'payoff' AND ? = 'transform') OR (status = 'transform' AND ? = 'transform'))", params: [chapterId, JSON.stringify(patch.payload), patch.status, (patch.expectedRevision as number) + 1, command.createdAt, projectId, patch.id, patch.expectedRevision as number, patch.status, patch.status, patch.status], expectAffectedRows: { min: 1, max: 1 } }),
     { sql: "INSERT INTO artifacts (artifact_id, project_id, artifact_type, current_revision, status, created_at, updated_at) VALUES (?, ?, 'project_document', 1, 'needs_review', ?, ?)", params: [outlineArtifactId, projectId, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
     { sql: "INSERT INTO project_documents (document_id, project_id, chapter_id, document_type, status, artifact_id, created_at, updated_at) VALUES (?, ?, ?, 'outline_drift', 'needs_review', ?, ?, ?)", params: [outlineDocumentId, projectId, chapterId, outlineArtifactId, command.createdAt, command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
     { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, 1, NULL, ?, NULL, ?, ?)", params: [outlineArtifactId, JSON.stringify({ schema_version: 1, kind: "outline_drift", chapterId, productionCommitId, ...outlinePayload }), JSON.stringify(command.actor), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
-    { sql: "INSERT INTO production_commits (production_commit_id, project_id, chapter_id, accepted_document_id, manifest_object_hash, run_id, actor_json, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)", params: [productionCommitId, projectId, chapterId, textDocumentId, manifestObject.sha256, JSON.stringify(command.actor), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
+    { sql: "INSERT INTO production_commits (production_commit_id, project_id, chapter_id, accepted_document_id, manifest_object_hash, run_id, lineage_json, actor_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", params: [productionCommitId, projectId, chapterId, textDocumentId, manifestObject.sha256, runId as string | null, JSON.stringify(lineage), JSON.stringify(command.actor), command.createdAt], expectAffectedRows: { min: 1, max: 1 } },
   ];
   return {
     kind: "plan",
@@ -1818,10 +2240,23 @@ function plannedSelectedDraft(value: unknown): PlannedSelectedDraft | null {
   const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   const documentId = record && stringArg(record, "documentId");
   const model = record && stringArg(record, "model");
+  const executionRef = record && stringArg(record, "executionRef");
   const revision = record?.revision;
   const reviewLineage = record?.reviewLineage;
-  if (!documentId || !model || (revision !== "v1" && revision !== "v2" && revision !== "v3") || !Array.isArray(reviewLineage) || reviewLineage.some((item) => typeof item !== "string" || !item.trim()) || new Set(reviewLineage).size !== reviewLineage.length) return null;
-  return { documentId, model, revision, reviewLineage: [...reviewLineage] as string[] };
+  if (!documentId || !model || !executionRef || (revision !== "v1" && revision !== "v2" && revision !== "v3") || !Array.isArray(reviewLineage) || reviewLineage.some((item) => typeof item !== "string" || !item.trim()) || new Set(reviewLineage).size !== reviewLineage.length) return null;
+  return { documentId, model, executionRef, revision, reviewLineage: [...reviewLineage] as string[] };
+}
+
+/** null 表示零方法卡章节；有值则由同一事务再次确认三份方法链文档仍是当前 revision。 */
+function plannedMethodOutcome(value: unknown): PlannedMethodOutcome | null | undefined {
+  if (value === null) return null;
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const outcomeId = record && stringArg(record, "outcomeId");
+  const applicationId = record && stringArg(record, "applicationId");
+  const reviewId = record && stringArg(record, "reviewId");
+  const revisions = [record?.outcomeRevision, record?.applicationRevision, record?.reviewRevision];
+  if (!outcomeId || !applicationId || !reviewId || revisions.some((revision) => !Number.isInteger(revision) || (revision as number) < 1)) return undefined;
+  return { outcomeId, outcomeRevision: revisions[0] as number, applicationId, applicationRevision: revisions[1] as number, reviewId, reviewRevision: revisions[2] as number };
 }
 
 function plannedRevisionPatches(value: unknown, idKey: string, schemas: PayloadSchemaRegistry, schemaName: string, extraIdKey?: string): PlannedRevisionPatch[] | null {
@@ -1846,12 +2281,17 @@ function plannedReaderPromises(value: unknown, schemas: PayloadSchemaRegistry): 
   for (const item of value) {
     const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
     const id = record && typeof record.readerPromiseId === "string" && record.readerPromiseId.trim() ? record.readerPromiseId : "";
+    const expectedRevision = record?.expectedRevision === undefined ? null : record.expectedRevision;
     const status = record && typeof record.status === "string" ? record.status : "";
     const payload = record && record.payload && typeof record.payload === "object" && !Array.isArray(record.payload) ? record.payload as Record<string, unknown> : null;
-    if (!id || !statuses.has(status) || !payload || !schemas.validate("reader_promise", payload).ok) return null;
-    promises.push({ id, status, payload });
+    if (!id || !statuses.has(status) || !expectedValidRevision(expectedRevision) || (expectedRevision === null && status !== "establish") || !payload || !schemas.validate("reader_promise", payload).ok) return null;
+    promises.push({ id, expectedRevision: expectedRevision as number | null, status, payload });
   }
   return new Set(promises.map((promise) => promise.id)).size === promises.length ? promises : null;
+}
+
+function expectedValidRevision(value: unknown): value is number | null {
+  return value === null || (Number.isInteger(value) && (value as number) >= 1);
 }
 
 interface PlannedReadingMapUnit {
@@ -2436,6 +2876,7 @@ function unavailableProductionActions(): WorkspaceProductionActionService {
     freezeChapterContextManifest: unavailable,
     freezeChapterReaderManifest: unavailable,
     commitChapter: unavailable,
+    requestChapterCommit: unavailable,
   } as WorkspaceProductionActionService;
 }
 

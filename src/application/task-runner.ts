@@ -106,6 +106,22 @@ export function createTaskRunner(driver: SqlDriver, options: CreateTaskRunnerOpt
       const leaseExpiresAt = claimedAt + leaseDurationMs;
       const attemptId = taskUuid();
       const eventId = taskUuid();
+      // A host may die after a cancellation request.  A later claimant must
+      // converge the task to cancelled instead of reviving it as running.
+      const cancellation = await driver.transaction([
+        {
+          sql: "UPDATE tasks SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE task_id = ? AND status = 'cancel_requested' AND (lease_expires_at IS NULL OR lease_expires_at < ?)",
+          params: [claimedAt, taskId, claimedAt],
+          expectAffectedRows: { min: 0, max: 1 },
+        },
+      ]);
+      if (cancellation.steps[0].rowsAffected === 1) {
+        await driver.transaction([
+          { sql: "UPDATE task_attempts SET status = 'cancelled', finished_at = ?, error_json = NULL WHERE task_id = ? AND status = 'running'", params: [claimedAt, taskId], expectAffectedRows: { min: 0 } },
+          taskEventStep(taskId, "cancelled", { schema_version: 1, reason: "expired_cancel_request" }, claimedAt),
+        ]);
+        return { claimed: false, status: "cancelled" as TaskStatus, leaseExpiresAt: null };
+      }
       const transaction = await driver.transaction([
         {
           sql: `

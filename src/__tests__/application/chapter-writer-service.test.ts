@@ -35,7 +35,7 @@ describe("ChapterWriter Application Service", () => {
       caller: { complete: async () => ({ text: "潮水退去，钟楼的指针开始倒走。", finishReason: "stop" }) },
     });
     const manifest: WriterContextManifest = {
-      schema_version: 1, kind: "chapter_context_manifest", manifestId: "manifest_001", projectId: "project_001", chapterId: "chapter_001", taskRole: "writer", conversationHistory: [], tokenBudget: 4096, reservedOutputTokens: 1024, tokenEstimate: 128,
+      schema_version: 1, kind: "chapter_context_manifest", manifestId: "manifest_001", projectId: "project_001", chapterId: "chapter_001", taskRole: "writer", conversationHistory: [], tokenBudget: 4096, reservedOutputTokens: 1024, modelContextWindowTokens: 4096, modelMaxOutputTokens: 1024, tokenEstimate: 128,
       layers: [
         { name: "chapter_contract", required: true, documentIds: ["planning:chapter_contract:chapter_001"], value: { desire: "确认信件来源" } },
         { name: "story_contract_and_system", required: true, documentIds: ["planning:story_contract", "planning:story_system"], value: {} },

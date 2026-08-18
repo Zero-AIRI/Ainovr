@@ -4,6 +4,7 @@ import type { ChapterReaderDraft } from "@/application/chapter-reader-manifest-s
 import type { ChapterReview, ChapterReviewIssue } from "@/application/chapter-review-service";
 import type { LocalCreationOutputValidationInput, LocalCreationService } from "@/application/local-creation-service";
 import type { TaskRecord } from "@/application/task-runner";
+import type { ResolvedModelRoute } from "@/application/model-resolver";
 
 type RecordValue = Record<string, unknown>;
 
@@ -54,6 +55,7 @@ export interface ChapterEditorTaskService {
     rationale: string;
     baseURL: string;
     model: string;
+    frozenRoute?: ResolvedModelRoute;
     maxTokens?: number;
   }): Promise<CommandResult>;
   run(taskId: string): Promise<TaskRecord | null>;
@@ -109,6 +111,7 @@ export function createChapterEditorTaskService(options: {
         prompt: editorPrompt(manifest),
         baseURL: input.baseURL,
         model: input.model,
+        ...(input.frozenRoute ? { frozenRoute: input.frozenRoute } : {}),
         ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
         outputMode: "structured_json",
         metadata: {
@@ -186,6 +189,8 @@ function editorPrompt(manifest: ChapterEditorTaskManifest): string {
   return [
     "你是 Ainovr 的定向 Editor。只依据冻结输入修订一个 Reviewer 已定位的问题，禁止整章重写或改动问题引文之外的字符。",
     "只输出一个 JSON 对象，不能使用 Markdown、代码围栏、评分、解释或未定义字段。replacements 必须恰好包含一个对象，issueId 不可改名，replacement 是替换该问题引文的文本。",
+    `唯一可替换原文片段（字面量，不得添加前后字符）：${JSON.stringify(issue.quote)}`,
+    "replacement 只能替代上面这一段字面量；不要把前后句子、标点、引号或解释一并输出。",
     "输出不得复述任何参考作品、作者秘密、机制说明或冻结输入以外的信息。",
     "使用下列不可改名骨架：",
     JSON.stringify(skeleton),
@@ -213,7 +218,7 @@ function assertTargetDocumentId(documentId: string, chapterId: string, sourceRev
 }
 
 function toReaderDraft(source: ChapterReaderDraft | ChapterEditorDraft): ChapterReaderDraft {
-  return { documentId: source.documentId, projectId: source.projectId, chapterId: source.chapterId, manifestId: source.manifestId, title: source.title, text: source.text, model: source.model, taskId: source.taskId, revision: source.revision };
+  return { documentId: source.documentId, projectId: source.projectId, chapterId: source.chapterId, manifestId: source.manifestId, title: source.title, text: source.text, model: source.model, executionRef: source.executionRef, revision: source.revision };
 }
 
 function manifestFromPrompt(prompt: string): ChapterEditorTaskManifest {

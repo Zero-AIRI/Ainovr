@@ -14,6 +14,12 @@ import type { EvidenceWorkbenchService } from "@/application/evidence-workbench-
 import type { MechanismAssetService } from "@/application/mechanism-asset-service";
 import type { StoryPlanningService } from "@/application/story-planning-service";
 import type { CreativeRecipeService } from "@/application/creative-recipe-service";
+import type { ChapterMechanismApplicationService } from "@/application/chapter-mechanism-application-service";
+import type { ChapterMechanismOutcomeService } from "@/application/chapter-mechanism-outcome-service";
+import type { MechanismEffectExperimentService } from "@/application/mechanism-effect-experiment-service";
+import type { MechanismEffectExperimentWriterService } from "@/application/mechanism-effect-experiment-writer-service";
+import type { MechanismEffectExperimentBlindReviewService } from "@/application/mechanism-effect-experiment-blind-review-service";
+import type { ChapterMethodWorkbenchService } from "@/application/chapter-method-workbench-service";
 import type { ChapterContextManifestService } from "@/application/chapter-context-manifest-service";
 import type { ChapterReaderManifestService } from "@/application/chapter-reader-manifest-service";
 import type { ChapterReviewService } from "@/application/chapter-review-service";
@@ -28,9 +34,10 @@ import type { WorkspaceExportService } from "@/application/workspace-export-serv
 import type { ReferenceImportService } from "@/application/reference-import-service";
 import type { ReferenceFileImportService } from "@/application/reference-file-import-service";
 import type { WorkspaceApplicationService } from "@/application/workspace-application-service";
+import { shouldAutoStartTask } from "@/application/automation-policy";
 
 /** 薄 CLI 适配器；所有业务动作转给与 MCP 相同的 Application Service。 */
-export async function executeWorkspaceCli(application: WorkspaceApplicationService, commandName: string, args: Record<string, unknown>, dependencies: { creation?: LocalCreationService; maintenance?: WorkspaceMaintenanceService; exporter?: WorkspaceExportService; references?: ReferenceImportService; referenceFileImport?: ReferenceFileImportService; corpus?: AnalysisCorpusService; facts?: AnalysisFactService; maps?: StructuralReadingMapService; factExtraction?: LocalFactExtractionService; batchFactExtraction?: LocalFactExtractionBatchService; threads?: ThreadGraphService; brief?: AnalysisBriefService; conclusions?: ResearchConclusionService; falsification?: IndependentFalsificationService; dossier?: ResearchDossierService; workbench?: EvidenceWorkbenchService; mechanisms?: MechanismAssetService; planning?: StoryPlanningService; recipes?: CreativeRecipeService; manifests?: ChapterContextManifestService; readerManifests?: ChapterReaderManifestService; readers?: ChapterReaderService; reviewer?: ChapterReviewerService; reviews?: ChapterReviewService; editor?: ChapterEditorService; editorTasks?: ChapterEditorTaskService; production?: ChapterProductionCommitService; writer?: ChapterWriterService } = {}): Promise<unknown> {
+export async function executeWorkspaceCli(application: WorkspaceApplicationService, commandName: string, args: Record<string, unknown>, dependencies: { creation?: LocalCreationService; maintenance?: WorkspaceMaintenanceService; exporter?: WorkspaceExportService; references?: ReferenceImportService; referenceFileImport?: ReferenceFileImportService; corpus?: AnalysisCorpusService; facts?: AnalysisFactService; maps?: StructuralReadingMapService; factExtraction?: LocalFactExtractionService; batchFactExtraction?: LocalFactExtractionBatchService; threads?: ThreadGraphService; brief?: AnalysisBriefService; conclusions?: ResearchConclusionService; falsification?: IndependentFalsificationService; dossier?: ResearchDossierService; workbench?: EvidenceWorkbenchService; mechanisms?: MechanismAssetService; planning?: StoryPlanningService; chapterApplications?: ChapterMechanismApplicationService; chapterOutcomes?: ChapterMechanismOutcomeService; mechanismEffectExperiments?: MechanismEffectExperimentService; mechanismEffectWriter?: MechanismEffectExperimentWriterService; mechanismEffectBlindReview?: MechanismEffectExperimentBlindReviewService; chapterMethodWorkbench?: ChapterMethodWorkbenchService; recipes?: CreativeRecipeService; manifests?: ChapterContextManifestService; readerManifests?: ChapterReaderManifestService; readers?: ChapterReaderService; reviewer?: ChapterReviewerService; reviews?: ChapterReviewService; editor?: ChapterEditorService; editorTasks?: ChapterEditorTaskService; production?: ChapterProductionCommitService; writer?: ChapterWriterService } = {}): Promise<unknown> {
   if (commandName === "get-workspace-status") return application.queries.getWorkspaceStatus();
   if (commandName === "get-capabilities") return application.queries.getCapabilities();
   if (commandName === "list-actionable-tasks") return application.queries.listActionableTasks();
@@ -47,14 +54,14 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "approve-confirmation") {
     return application.commands.approveConfirmation({
       confirmationId: requiredString(args, "confirmationId"),
-      actor: { kind: "human", id: "cli" },
+      actor: { kind: "human_via_agent", id: "cli" },
       reason: requiredString(args, "reason"),
     });
   }
   if (commandName === "reject-confirmation") {
     return application.commands.rejectConfirmation({
       confirmationId: requiredString(args, "confirmationId"),
-      actor: { kind: "human", id: "cli" },
+      actor: { kind: "human_via_agent", id: "cli" },
       reason: requiredString(args, "reason"),
     });
   }
@@ -68,6 +75,41 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "list-coverage-gaps") return application.queries.listCoverageGaps();
   if (commandName === "list-provider-profiles") return application.queries.listProviderProfiles();
   if (commandName === "get-workspace-settings") return application.queries.getWorkspaceSettings();
+  if (commandName === "get-chapter-method-workbench") return requireChapterMethodWorkbenchService(dependencies.chapterMethodWorkbench).get({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  if (commandName === "get-chapter-mechanism-application") return requireChapterApplicationService(dependencies.chapterApplications).get({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  if (commandName === "save-chapter-mechanism-application") return requireChapterApplicationService(dependencies.chapterApplications).save({ command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), expectedRevision: args.expectedRevision === null ? null : requiredPositiveInteger(args, "expectedRevision"), application: requiredRecord(args, "application") as never });
+  if (commandName === "get-chapter-mechanism-outcome") return requireChapterOutcomeService(dependencies.chapterOutcomes).get({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  if (commandName === "save-chapter-mechanism-outcome") return requireChapterOutcomeService(dependencies.chapterOutcomes).save({ command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), expectedRevision: args.expectedRevision === null ? null : requiredPositiveInteger(args, "expectedRevision"), outcome: requiredRecord(args, "outcome") as never });
+  if (commandName === "save-mechanism-effect-experiment") return requireMechanismEffectExperimentService(dependencies.mechanismEffectExperiments).save({ command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), expectedRevision: args.expectedRevision === null ? null : requiredPositiveInteger(args, "expectedRevision"), experiment: requiredRecord(args, "experiment") as never });
+  if (commandName === "get-mechanism-effect-experiment") return requireMechanismEffectExperimentService(dependencies.mechanismEffectExperiments).get({ projectId: requiredString(args, "projectId"), experimentId: requiredString(args, "experimentId") });
+  if (commandName === "start-mechanism-effect-experiment-candidate") {
+    const writer = requireMechanismEffectExperimentWriterService(dependencies.mechanismEffectWriter);
+    const result = await writer.start({ command: planningCommand(args), projectId: requiredString(args, "projectId"), experimentId: requiredString(args, "experimentId"), pairId: requiredString(args, "pairId"), candidateId: requiredString(args, "candidateId"), sourceManifestId: requiredString(args, "sourceManifestId"), taskId: requiredString(args, "taskId"), title: requiredString(args, "title") });
+    if (result.kind === "accepted" && await autoStartEnabled(application)) await writer.run(result.taskId);
+    return result;
+  }
+  if (commandName === "resume-mechanism-effect-experiment-candidate") {
+    const writer = requireMechanismEffectExperimentWriterService(dependencies.mechanismEffectWriter);
+    const taskId = requiredString(args, "taskId");
+    await writer.run(taskId);
+    return writer.getTask(taskId);
+  }
+  if (commandName === "start-mechanism-effect-experiment-blind-review") {
+    const blindReview = requireMechanismEffectExperimentBlindReviewService(dependencies.mechanismEffectBlindReview);
+    const result = await blindReview.start({ command: planningCommand(args), projectId: requiredString(args, "projectId"), experimentId: requiredString(args, "experimentId"), pairId: requiredString(args, "pairId"), sourceManifestId: requiredString(args, "sourceManifestId"), taskId: requiredString(args, "taskId"), documentId: requiredString(args, "documentId"), title: requiredString(args, "title") });
+    if (result.kind === "accepted" && await autoStartEnabled(application)) await blindReview.run(result.taskId);
+    return result;
+  }
+  if (commandName === "resume-mechanism-effect-experiment-blind-review") {
+    const blindReview = requireMechanismEffectExperimentBlindReviewService(dependencies.mechanismEffectBlindReview);
+    const taskId = requiredString(args, "taskId");
+    await blindReview.run(taskId);
+    return blindReview.getTask(taskId);
+  }
+  if (commandName === "get-mechanism-effect-experiment-blind-review") return requireMechanismEffectExperimentBlindReviewService(dependencies.mechanismEffectBlindReview).getReport({ documentId: requiredString(args, "documentId") });
+  if (commandName === "save-chapter-production-commit-proposal") return requireChapterProductionCommitService(dependencies.production).saveProposal({ command: planningCommand(args), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), expectedRevision: args.expectedRevision === null ? null : requiredPositiveInteger(args, "expectedRevision"), proposal: requiredRecord(args, "proposal") as never });
+  if (commandName === "get-chapter-production-commit-proposal") return requireChapterProductionCommitService(dependencies.production).getProposal({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  if (commandName === "request-chapter-production-commit") return requireChapterProductionCommitService(dependencies.production).acceptProposal({ command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), proposalId: requiredString(args, "proposalId") });
   if (commandName === "list-pipeline-revisions") return application.pipelines.list();
   if (commandName === "save-pipeline-revision") {
     const steps = args.steps;
@@ -96,7 +138,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   }
   if (commandName === "complete-pipeline-run-step") {
     return application.pipelineRuns.completeStep({
-      command: planningCommand(args),
+      command: planningCommand(args, "human_via_agent"),
       runId: requiredString(args, "runId"),
       stepId: requiredString(args, "stepId"),
       note: requiredString(args, "note"),
@@ -106,7 +148,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     const expectedRevision = args.expectedRevision;
     if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是正整数。 ");
     return application.commands.execute({
-      schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" },
+      schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" },
       ...(expectedRevision === undefined ? {} : { expectedRevision: expectedRevision as number }), tool: "save_workspace_settings",
       args: {
         automationMode: requiredString(args, "automationMode"),
@@ -122,9 +164,9 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是正整数。 ");
     const commandId = requiredString(args, "commandId");
     return application.commands.execute({
-      schemaVersion: 1, commandId, idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" },
+      schemaVersion: 1, commandId, idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" },
       ...(expectedRevision === undefined ? {} : { expectedRevision: expectedRevision as number }), tool: "save_provider_profile",
-      args: { providerProfileId: requiredString(args, "providerProfileId"), name: requiredString(args, "name"), baseURL: requiredString(args, "baseURL"), defaultModel: requiredString(args, "defaultModel"), routes: requiredRecords(args, "routes") }, createdAt: Date.now(),
+      args: { providerProfileId: requiredString(args, "providerProfileId"), name: requiredString(args, "name"), baseURL: requiredString(args, "baseURL"), protocol: requiredString(args, "protocol"), defaultModel: requiredString(args, "defaultModel"), contextWindowTokens: requiredIntegerInRange(args, "contextWindowTokens", 1024, 1_000_000), maxOutputTokens: requiredIntegerInRange(args, "maxOutputTokens", 256, 999_999), safetyMarginRatio: requiredRatio(args, "safetyMarginRatio"), routes: requiredRecords(args, "routes") }, createdAt: Date.now(),
     });
   }
   if (commandName === "create-novel-project") {
@@ -135,7 +177,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       commandId: requiredString(args, "commandId"),
       idempotencyKey: requiredString(args, "idempotencyKey"),
       correlationId: requiredString(args, "correlationId"),
-      actor: { kind: "human", id: "cli" },
+      actor: { kind: "external_agent", id: "cli" },
       tool: "create_novel_project",
       args: { projectId: requiredString(args, "projectId"), title: requiredString(args, "title"), status: requiredString(args, "status"), payload },
       createdAt: Date.now(),
@@ -151,7 +193,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
         commandId: requiredString(args, "commandId"),
         idempotencyKey: requiredString(args, "idempotencyKey"),
         correlationId: requiredString(args, "correlationId"),
-        actor: { kind: "human", id: "cli" },
+        actor: { kind: "external_agent", id: "cli" },
         createdAt: Date.now(),
       },
       taskId: requiredString(args, "taskId"),
@@ -164,8 +206,15 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
     if (result.kind !== "accepted") return result;
-    await creation.run(result.taskId);
+    if (await autoStartEnabled(application)) await creation.run(result.taskId);
     return { command: result, task: await creation.getTask(result.taskId), draft: await creation.getDraft(requiredString(args, "documentId")) };
+  }
+  if (commandName === "resume-local-creation") {
+    const creation = dependencies.creation;
+    if (!creation) throw new Error("当前 CLI 未配置本地创作服务。");
+    const taskId = requiredString(args, "taskId");
+    await creation.run(taskId);
+    return creation.getTask(taskId);
   }
   if (commandName === "create-workspace-backup") {
     const maintenance = requireWorkspaceMaintenanceService(dependencies.maintenance);
@@ -173,7 +222,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       command: planningCommand(args), taskId: requiredString(args, "taskId"), backupId: requiredString(args, "backupId"),
     });
     if (result.kind !== "accepted") return result;
-    await maintenance.run(result.taskId);
+    if (await autoStartEnabled(application)) await maintenance.run(result.taskId);
     return { command: result, task: await maintenance.getTask(result.taskId) };
   }
   if (commandName === "restore-workspace-backup") {
@@ -182,7 +231,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       command: planningCommand(args), taskId: requiredString(args, "taskId"), backupId: requiredString(args, "backupId"), restoreId: requiredString(args, "restoreId"),
     });
     if (result.kind !== "accepted") return result;
-    await maintenance.run(result.taskId);
+    if (await autoStartEnabled(application)) await maintenance.run(result.taskId);
     return { command: result, task: await maintenance.getTask(result.taskId) };
   }
   if (commandName === "resume-workspace-maintenance") {
@@ -197,7 +246,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       command: planningCommand(args), taskId: requiredString(args, "taskId"), projectId: requiredString(args, "projectId"), exportId: requiredString(args, "exportId"),
     });
     if (result.kind !== "accepted") return result;
-    await exporter.run(result.taskId);
+    if (await autoStartEnabled(application)) await exporter.run(result.taskId);
     return { command: result, task: await exporter.getTask(result.taskId) };
   }
   if (commandName === "export-analysis") {
@@ -206,7 +255,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       command: planningCommand(args), taskId: requiredString(args, "taskId"), referenceWorkId: requiredString(args, "referenceWorkId"), exportId: requiredString(args, "exportId"),
     });
     if (result.kind !== "accepted") return result;
-    await exporter.run(result.taskId);
+    if (await autoStartEnabled(application)) await exporter.run(result.taskId);
     return { command: result, task: await exporter.getTask(result.taskId) };
   }
   if (commandName === "resume-workspace-export") {
@@ -236,7 +285,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
         commandId: requiredString(args, "commandId"),
         idempotencyKey: requiredString(args, "idempotencyKey"),
         correlationId: requiredString(args, "correlationId"),
-        actor: { kind: "human", id: "cli" },
+      actor: { kind: "external_agent", id: "cli" },
         createdAt: Date.now(),
       },
       referenceWorkId: requiredString(args, "referenceWorkId"),
@@ -256,7 +305,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       sourcePath: requiredString(args, "sourcePath"),
     });
     if (result.kind !== "accepted") return result;
-    await files.run(result.taskId);
+    if (await autoStartEnabled(application)) await files.run(result.taskId);
     return { command: result, task: await files.getTask(result.taskId) };
   }
   if (commandName === "resume-reference-file-import") {
@@ -288,7 +337,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     const boundary = args.boundary;
     if (boundary !== "complete" && boundary !== "volume" && boundary !== "fragment") throw new Error("boundary 非法");
     return corpus.prepare({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       segmentationId: requiredString(args, "segmentationId"),
       sourceEditionId: requiredString(args, "sourceEditionId"),
@@ -308,14 +357,14 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "get-source-span") return requireCorpusService(dependencies.corpus).getSourceSpan(requiredString(args, "spanId"));
   if (commandName === "create-structural-reading-map") {
     return requireReadingMapService(dependencies.maps).create({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
     });
   }
   if (commandName === "get-structural-reading-map") return requireReadingMapService(dependencies.maps).get(requiredString(args, "analysisProjectId"));
   if (commandName === "submit-analysis-facts") {
     return requireFactService(dependencies.facts).submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       analysisUnitId: requiredString(args, "analysisUnitId"),
       rawOutput: requiredString(args, "rawOutput"),
@@ -325,7 +374,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "extract-local-facts") {
     const extraction = requireFactExtractionService(dependencies.factExtraction);
     const result = await extraction.start({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       taskId: requiredString(args, "taskId"),
       analysisProjectId: requiredString(args, "analysisProjectId"),
       analysisUnitId: requiredString(args, "analysisUnitId"),
@@ -334,7 +383,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
     if (result.kind !== "accepted") return result;
-    await extraction.run(result.taskId);
+    if (await autoStartEnabled(application)) await extraction.run(result.taskId);
     return { command: result, task: await extraction.getTask(result.taskId) };
   }
   if (commandName === "resume-local-fact-extraction") {
@@ -346,25 +395,25 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "reconfigure-local-facts") {
     const extraction = requireFactExtractionService(dependencies.factExtraction);
     const result = await extraction.reconfigure({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       taskId: requiredString(args, "taskId"),
       baseURL: configuredBaseURL(args),
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
     if (result.kind !== "accepted") return result;
-    await extraction.run(result.taskId);
+    if (await autoStartEnabled(application)) await extraction.run(result.taskId);
     return { command: result, task: await extraction.getTask(result.taskId) };
   }
   if (commandName === "extract-local-facts-batch") {
     const extraction = requireFactExtractionBatchService(dependencies.batchFactExtraction);
     const result = await extraction.start({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       taskId: requiredString(args, "taskId"), analysisProjectId: requiredString(args, "analysisProjectId"), baseURL: configuredBaseURL(args), model: configuredModel(args),
       ...(args.maxTokens === undefined ? {} : { maxTokens: requiredIntegerInRange(args, "maxTokens", 256, 16_384) }),
     });
     if (result.kind !== "accepted") return result;
-    await extraction.run(result.taskId);
+    if (await autoStartEnabled(application)) await extraction.run(result.taskId);
     return { command: result, task: await extraction.getTask(result.taskId) };
   }
   if (commandName === "resume-local-fact-extraction-batch") {
@@ -375,7 +424,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   }
   if (commandName === "submit-thread-graph") {
     return requireThreadGraphService(dependencies.threads).submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       rawOutput: requiredString(args, "rawOutput"),
     });
@@ -383,7 +432,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "get-thread-graph") return requireThreadGraphService(dependencies.threads).getThreads(requiredString(args, "analysisProjectId"));
   if (commandName === "submit-analysis-brief") {
     return requireAnalysisBriefService(dependencies.brief).submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       rawOutput: requiredString(args, "rawOutput"),
     });
@@ -391,13 +440,13 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "get-analysis-brief") return requireAnalysisBriefService(dependencies.brief).get(requiredString(args, "analysisProjectId"));
   if (commandName === "approve-analysis-brief") {
     return requireAnalysisBriefService(dependencies.brief).approve({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
     });
   }
   if (commandName === "submit-research-conclusions") {
     return requireResearchConclusionService(dependencies.conclusions).submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       researchQuestionId: requiredString(args, "researchQuestionId"),
       rawOutput: requiredString(args, "rawOutput"),
@@ -407,7 +456,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "get-falsification-work-item") return requireIndependentFalsificationService(dependencies.falsification).getWorkItem(requiredString(args, "analysisProjectId"), requiredString(args, "conclusionId"));
   if (commandName === "submit-independent-falsification") {
     return requireIndependentFalsificationService(dependencies.falsification).submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       conclusionId: requiredString(args, "conclusionId"),
       rawOutput: requiredString(args, "rawOutput"),
@@ -416,7 +465,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   if (commandName === "get-independent-falsification") return requireIndependentFalsificationService(dependencies.falsification).getByConclusion(requiredString(args, "analysisProjectId"), requiredString(args, "conclusionId"));
   if (commandName === "create-research-dossier") {
     return requireResearchDossierService(dependencies.dossier).create({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
     });
   }
@@ -438,7 +487,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   }
   if (commandName === "propose-mechanism-candidate") {
     return requireMechanismAssetService(dependencies.mechanisms).propose({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "cli" }, createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       rawOutput: requiredString(args, "rawOutput"),
     });
@@ -449,7 +498,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     const status = requiredString(args, "status");
     if (status !== "adopted" && status !== "editor_only" && status !== "rejected") throw new Error("status 必须为 adopted、editor_only 或 rejected");
     return requireMechanismAssetService(dependencies.mechanisms).review({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, projectId: requiredString(args, "projectId"), expectedRevision: requiredIntegerInRange(args, "expectedRevision", 1, Number.MAX_SAFE_INTEGER), createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "cli" }, projectId: requiredString(args, "projectId"), expectedRevision: requiredIntegerInRange(args, "expectedRevision", 1, Number.MAX_SAFE_INTEGER), createdAt: Date.now() },
       mechanismAssetId: requiredString(args, "mechanismAssetId"), status,
     });
   }
@@ -462,13 +511,13 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     return requireStoryPlanningService(dependencies.planning).submitStoryConcepts({ command: planningCommand(args), projectId: requiredString(args, "projectId"), rawOutput: requiredString(args, "rawOutput") });
   }
   if (commandName === "select-story-concept") {
-    return requireStoryPlanningService(dependencies.planning).selectStoryConcept({ command: planningCommand(args), projectId: requiredString(args, "projectId"), conceptId: requiredString(args, "conceptId") });
+    return requireStoryPlanningService(dependencies.planning).selectStoryConcept({ command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), conceptId: requiredString(args, "conceptId") });
   }
   if (commandName === "review-project-planning-document") {
     const status = requiredString(args, "status");
     if (status !== "approved" && status !== "rejected") throw new Error("status 必须为 approved 或 rejected");
     return requireStoryPlanningService(dependencies.planning).reviewDocument({
-      command: planningCommand(args), projectId: requiredString(args, "projectId"), documentId: requiredString(args, "documentId"),
+      command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), documentId: requiredString(args, "documentId"),
       expectedRevision: requiredIntegerInRange(args, "expectedRevision", 1, Number.MAX_SAFE_INTEGER), status,
     });
   }
@@ -517,7 +566,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       command: planningCommand(args), taskId: requiredString(args, "taskId"), documentId: requiredString(args, "documentId"), reportId: requiredString(args, "reportId"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), manifestId: requiredString(args, "manifestId"), title: requiredString(args, "title"), baseURL: configuredBaseURL(args), model: configuredModel(args), ...(args.maxTokens === undefined ? {} : { maxTokens: requiredIntegerInRange(args, "maxTokens", 256, 16_384) }),
     });
     if (result.kind !== "accepted") return result;
-    await readers.run(result.taskId);
+    if (await autoStartEnabled(application)) await readers.run(result.taskId);
     return { command: result, task: await readers.getTask(result.taskId), feedback: await readers.getReport({ documentId: requiredString(args, "documentId") }) };
   }
   if (commandName === "get-chapter-reader-feedback") {
@@ -531,7 +580,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       title: requiredString(args, "title"), baseURL: configuredBaseURL(args), model: configuredModel(args), ...(args.maxTokens === undefined ? {} : { maxTokens: requiredIntegerInRange(args, "maxTokens", 256, 16_384) }),
     });
     if (result.kind !== "accepted") return result;
-    await reviewer.run(result.taskId);
+    if (await autoStartEnabled(application)) await reviewer.run(result.taskId);
     return { command: result, task: await reviewer.getTask(result.taskId), review: await reviewer.getReview({ projectId: requiredString(args, "projectId"), reviewId: requiredString(args, "reviewId") }) };
   }
   if (commandName === "get-chapter-reviewer-review") {
@@ -546,8 +595,9 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     return requireChapterReviewService(dependencies.reviews).get({ projectId: requiredString(args, "projectId"), reviewId: requiredString(args, "reviewId") });
   }
   if (commandName === "create-chapter-editor-draft") {
+    const command = planningCommand(args);
     return requireChapterEditorService(dependencies.editor).create({
-      command: planningCommand(args), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), documentId: requiredString(args, "documentId"), title: requiredString(args, "title"), sourceDraftDocumentId: requiredString(args, "sourceDraftDocumentId"), reviewId: requiredString(args, "reviewId"), selectedIssueIds: requiredStrings(args, "selectedIssueIds"), editedText: requiredString(args, "editedText"), rationale: requiredString(args, "rationale"),
+      command, executionRef: command.commandId, projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), documentId: requiredString(args, "documentId"), title: requiredString(args, "title"), sourceDraftDocumentId: requiredString(args, "sourceDraftDocumentId"), reviewId: requiredString(args, "reviewId"), selectedIssueIds: requiredStrings(args, "selectedIssueIds"), editedText: requiredString(args, "editedText"), rationale: requiredString(args, "rationale"),
     });
   }
   if (commandName === "get-chapter-editor-draft") {
@@ -561,12 +611,18 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
       baseURL: configuredBaseURL(args), model: configuredModel(args), ...(args.maxTokens === undefined ? {} : { maxTokens: requiredIntegerInRange(args, "maxTokens", 256, 16_384) }),
     });
     if (result.kind !== "accepted") return result;
-    await editorTasks.run(result.taskId);
+    if (await autoStartEnabled(application)) await editorTasks.run(result.taskId);
     return { command: result, task: await editorTasks.getTask(result.taskId), draft: await editorTasks.getDraft(requiredString(args, "targetDocumentId")) };
+  }
+  if (commandName === "resume-chapter-editor") {
+    const editorTasks = requireChapterEditorTaskService(dependencies.editorTasks);
+    const taskId = requiredString(args, "taskId");
+    await editorTasks.run(taskId);
+    return editorTasks.getTask(taskId);
   }
   if (commandName === "commit-chapter") {
     return requireChapterProductionCommitService(dependencies.production).acceptDraft({
-      command: planningCommand(args), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), chapterOrdinal: requiredIntegerInRange(args, "chapterOrdinal", 1, Number.MAX_SAFE_INTEGER), productionCommitId: requiredString(args, "productionCommitId"), draftDocumentId: requiredString(args, "draftDocumentId"), chapterDelta: requiredRecord(args, "chapterDelta"), canonPatches: requiredRecords(args, "canonPatches") as unknown as CanonPatch[], characterKnowledgePatches: requiredRecords(args, "characterKnowledgePatches") as unknown as CharacterKnowledgePatch[], readerState: requiredRecord(args, "readerState") as { readerStateId: string; payload: Record<string, unknown> }, readerPromiseUpdates: requiredRecords(args, "readerPromiseUpdates") as unknown as ReaderPromisePatch[], outlineDrift: requiredRecord(args, "outlineDrift") as { payload: Record<string, unknown> },
+      command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), chapterOrdinal: requiredIntegerInRange(args, "chapterOrdinal", 1, Number.MAX_SAFE_INTEGER), productionCommitId: requiredString(args, "productionCommitId"), draftDocumentId: requiredString(args, "draftDocumentId"), chapterDelta: requiredRecord(args, "chapterDelta"), canonPatches: requiredRecords(args, "canonPatches") as unknown as CanonPatch[], characterKnowledgePatches: requiredRecords(args, "characterKnowledgePatches") as unknown as CharacterKnowledgePatch[], readerState: requiredRecord(args, "readerState") as { readerStateId: string; payload: Record<string, unknown> }, readerPromiseUpdates: requiredRecords(args, "readerPromiseUpdates") as unknown as ReaderPromisePatch[], outlineDrift: requiredRecord(args, "outlineDrift") as { payload: Record<string, unknown> },
     });
   }
   if (commandName === "get-accepted-chapter") {
@@ -576,7 +632,7 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
     const writer = requireChapterWriterService(dependencies.writer);
     const result = await writer.start({ command: planningCommand(args), taskId: requiredString(args, "taskId"), documentId: requiredString(args, "documentId"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), manifestId: requiredString(args, "manifestId"), title: requiredString(args, "title"), baseURL: configuredBaseURL(args), model: configuredModel(args), ...(args.maxTokens === undefined ? {} : { maxTokens: requiredIntegerInRange(args, "maxTokens", 256, 16_384) }) });
     if (result.kind !== "accepted") return result;
-    await writer.run(result.taskId);
+    if (await autoStartEnabled(application)) await writer.run(result.taskId);
     return { command: result, task: await writer.getTask(result.taskId), draft: await writer.getDraft({ documentId: requiredString(args, "documentId") }) };
   }
   if (commandName === "get-chapter-writer-draft") {
@@ -585,12 +641,46 @@ export async function executeWorkspaceCli(application: WorkspaceApplicationServi
   throw new Error(`未知 CLI 命令：${commandName}`);
 }
 
-function planningCommand(args: Record<string, unknown>): Omit<CommandEnvelope, "tool" | "args"> {
-  return { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human", id: "cli" }, createdAt: Date.now() };
+function planningCommand(args: Record<string, unknown>, kind: "external_agent" | "human_via_agent" = "external_agent"): Omit<CommandEnvelope, "tool" | "args"> {
+  return { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind, id: "cli" }, createdAt: Date.now() };
+}
+
+async function autoStartEnabled(application: WorkspaceApplicationService): Promise<boolean> {
+  return shouldAutoStartTask((await application.queries.getWorkspaceSettings()).automationMode);
 }
 
 function requireChapterReaderManifestService(service: ChapterReaderManifestService | undefined): ChapterReaderManifestService {
   if (!service) throw new Error("当前 CLI 未配置 ChapterReaderManifest 服务。 ");
+  return service;
+}
+
+function requireChapterApplicationService(service: ChapterMechanismApplicationService | undefined): ChapterMechanismApplicationService {
+  if (!service) throw new Error("当前 CLI 未配置本章采用记录服务。 ");
+  return service;
+}
+
+function requireChapterOutcomeService(service: ChapterMechanismOutcomeService | undefined): ChapterMechanismOutcomeService {
+  if (!service) throw new Error("当前 CLI 未配置本章应用结果服务。 ");
+  return service;
+}
+
+function requireMechanismEffectExperimentService(service: MechanismEffectExperimentService | undefined): MechanismEffectExperimentService {
+  if (!service) throw new Error("机制效用实验服务未配置。 ");
+  return service;
+}
+
+function requireMechanismEffectExperimentWriterService(service: MechanismEffectExperimentWriterService | undefined): MechanismEffectExperimentWriterService {
+  if (!service) throw new Error("机制效用实验 Writer 未配置。 ");
+  return service;
+}
+
+function requireMechanismEffectExperimentBlindReviewService(service: MechanismEffectExperimentBlindReviewService | undefined): MechanismEffectExperimentBlindReviewService {
+  if (!service) throw new Error("机制效用实验盲评未配置。 ");
+  return service;
+}
+
+function requireChapterMethodWorkbenchService(service: ChapterMethodWorkbenchService | undefined): ChapterMethodWorkbenchService {
+  if (!service) throw new Error("当前 CLI 未配置章节方法工作台服务。 ");
   return service;
 }
 
@@ -650,6 +740,12 @@ function requiredNonNegativeInteger(args: Record<string, unknown>, key: string):
   const value = args[key];
   if (!Number.isInteger(value) || (value as number) < 0) throw new Error(`${key} 必须是非负整数`);
   return value as number;
+}
+
+function requiredPositiveInteger(args: Record<string, unknown>, key: string): number {
+  const value = requiredNonNegativeInteger(args, key);
+  if (value < 1) throw new Error(`${key} 必须是正整数`);
+  return value;
 }
 
 function requiredByteRange(args: Record<string, unknown>, key: string): { startByte: number; endByte: number } {

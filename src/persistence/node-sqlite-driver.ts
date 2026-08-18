@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { COMMAND_EXPECTED_REVISION_SCHEMA_VERSION, COMMAND_EXPECTED_REVISION_SQL, DATA_POLICY_REVISIONS_SCHEMA_VERSION, DATA_POLICY_REVISIONS_SQL, INITIAL_SCHEMA_SQL, INITIAL_SCHEMA_VERSION, PROJECT_SCOPED_PLANNING_DOCUMENT_IDS_SCHEMA_VERSION, PROJECT_SCOPED_PLANNING_DOCUMENT_IDS_SQL, PROVIDER_PROFILE_REVISIONS_SCHEMA_VERSION, PROVIDER_PROFILE_REVISIONS_SQL } from "@/persistence/migrations/0001-initial-schema";
+import { assertFinalProductionShape, COMMAND_EXPECTED_REVISION_SCHEMA_VERSION, COMMAND_EXPECTED_REVISION_SQL, DATA_POLICY_REVISIONS_SCHEMA_VERSION, DATA_POLICY_REVISIONS_SQL, FINAL_PRODUCTION_SCHEMA_SQL, FINAL_PRODUCTION_SCHEMA_VERSION, INITIAL_SCHEMA_SQL, INITIAL_SCHEMA_VERSION, migrateFinalProductionSchema, PROJECT_SCOPED_PLANNING_DOCUMENT_IDS_SCHEMA_VERSION, PROJECT_SCOPED_PLANNING_DOCUMENT_IDS_SQL, PROVIDER_PROFILE_REVISIONS_SCHEMA_VERSION, PROVIDER_PROFILE_REVISIONS_SQL } from "@/persistence/migrations/0001-initial-schema";
 import { createNodeMigrationBackup } from "@/persistence/node-migration-backup";
 import { AffectedRowsExpectationError, type SqlDriver, type SqlStatement, type SqlValue, type StatementResult, type TransactionResult, type TransactionStep } from "@/persistence/sql-driver";
 
@@ -19,13 +19,15 @@ export interface NodeSqlDriver extends SqlDriver {
 }
 
 const FORBIDDEN_SQL = /\b(?:attach|detach|load_extension)\b|\b(?:pragma\s+(?:writable_schema|trusted_schema|legacy_file_format))\b/i;
-const MIGRATIONS = [
+type Migration = { version: string; sql: string; apply?: (database: Database.Database) => void };
+const MIGRATIONS: readonly Migration[] = [
   { version: INITIAL_SCHEMA_VERSION, sql: INITIAL_SCHEMA_SQL },
   { version: COMMAND_EXPECTED_REVISION_SCHEMA_VERSION, sql: COMMAND_EXPECTED_REVISION_SQL },
   { version: PROVIDER_PROFILE_REVISIONS_SCHEMA_VERSION, sql: PROVIDER_PROFILE_REVISIONS_SQL },
   { version: DATA_POLICY_REVISIONS_SCHEMA_VERSION, sql: DATA_POLICY_REVISIONS_SQL },
   { version: PROJECT_SCOPED_PLANNING_DOCUMENT_IDS_SCHEMA_VERSION, sql: PROJECT_SCOPED_PLANNING_DOCUMENT_IDS_SQL },
-] as const;
+  { version: FINAL_PRODUCTION_SCHEMA_VERSION, sql: FINAL_PRODUCTION_SCHEMA_SQL, apply: migrateFinalProductionSchema },
+];
 
 /**
  * Node/MCP/CLI 的 SQLite 适配器。它不包含任何小说领域规则，也不接受任意数据库路径。
@@ -40,6 +42,7 @@ export async function createNodeSqlDriver(options: CreateNodeSqlDriverOptions): 
     assertSupportedSchemaVersion(database);
     configureConnection(database);
     await applyMigrations(database, options.workspacePath);
+    assertFinalProductionShape(database);
   } catch (cause) {
     database.close();
     throw cause;
@@ -119,6 +122,7 @@ async function applyMigrations(database: Database.Database, workspacePath: strin
     try {
       ensureMigrationColumns(database, migration.version);
       database.exec(migration.sql);
+      migration.apply?.(database);
       database.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(migration.version, Date.now());
       database.exec("COMMIT");
     } catch (error) {

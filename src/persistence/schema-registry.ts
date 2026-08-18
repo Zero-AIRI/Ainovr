@@ -37,10 +37,30 @@ export function createSchemaRegistry(): PayloadSchemaRegistry {
       if (!versions.has(payload.schema_version)) {
         return { ok: false, diagnostics: [{ code: "unsupported_schema_version", message: `${schemaName} 不支持 schema_version ${payload.schema_version}。` }] };
       }
+      const validator = validators[schemaName];
+      if (validator) {
+        const diagnostic = validator(payload);
+        if (diagnostic) return { ok: false, diagnostics: [{ code: "invalid_payload", message: diagnostic }] };
+      }
       return { ok: true };
     },
   };
 }
+
+type PayloadValidator = (payload: Record<string, unknown>) => string | null;
+const validators: Record<string, PayloadValidator> = {
+  provider_profile: (payload) => {
+    const protocol = payload.protocol;
+    if (payload.kind !== "provider_profile" || typeof payload.name !== "string" || typeof payload.baseURL !== "string" || typeof payload.defaultModel !== "string") return "provider_profile 必须包含 kind/name/baseURL/defaultModel。";
+    if (protocol !== "chat_completions" && protocol !== "responses" && protocol !== "ollama_native") return "provider_profile.protocol 无效。";
+    if (!Number.isInteger(payload.contextWindowTokens) || !Number.isInteger(payload.maxOutputTokens) || typeof payload.safetyMarginRatio !== "number") return "provider_profile 必须包含完整模型能力预算。";
+    if ((payload.maxOutputTokens as number) >= (payload.contextWindowTokens as number) || (payload.safetyMarginRatio as number) < 0 || (payload.safetyMarginRatio as number) >= 1) return "Provider 模型能力预算范围无效。";
+    if (!Array.isArray(payload.routes) || payload.routes.some((route) => !isRecord(route) || typeof route.role !== "string" || typeof route.model !== "string")) return "provider_profile.routes 无效。";
+    return null;
+  },
+  reader_state: (payload) => Object.keys(payload).some((key) => key === "apiKey" || /secret|password/i.test(key)) ? "ReaderState 不得包含 Secret 字段。" : null,
+  reader_promise: (payload) => Object.keys(payload).some((key) => key === "apiKey" || /secret|password/i.test(key)) ? "ReaderPromise 不得包含 Secret 字段。" : null,
+};
 
 /** R0 冻结的 V1/V2 领域 payload 在新 SQLite Repository 中的注册入口。 */
 export function registerCorePayloadSchemas(registry: PayloadSchemaRegistry): void {

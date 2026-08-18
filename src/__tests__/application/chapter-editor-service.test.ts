@@ -41,12 +41,12 @@ describe("ChapterEditor Application Service", () => {
     });
 
     await expect(editor.create({
-      command: command("v2"), projectId: "project_001", chapterId: "chapter_001", documentId: "production:chapter_draft:chapter_001:v2", title: "第一章 V2", sourceDraftDocumentId: v1().documentId, reviewId: "review_v1", selectedIssueIds: ["issue_review_v1"], editedText: "林霁推开钟楼的门，翻涌的潮水在门外停住。", rationale: "补足潮水异常的局部因果动作。",
+      command: command("v2"), executionRef: "editor_task_v2", projectId: "project_001", chapterId: "chapter_001", documentId: "production:chapter_draft:chapter_001:v2", title: "第一章 V2", sourceDraftDocumentId: v1().documentId, reviewId: "review_v1", selectedIssueIds: ["issue_review_v1"], editedText: "林霁推开钟楼的门，翻涌的潮水在门外停住。", rationale: "补足潮水异常的局部因果动作。",
     })).resolves.toMatchObject({ kind: "ok", revision: 1 });
-    await expect(editor.getDraft("production:chapter_draft:chapter_001:v2")).resolves.toMatchObject({ revision: "v2", parentDocumentId: v1().documentId, reviewId: "review_v1", selectedIssueIds: ["issue_review_v1"], text: "林霁推开钟楼的门，翻涌的潮水在门外停住。" });
+    await expect(editor.getDraft("production:chapter_draft:chapter_001:v2")).resolves.toMatchObject({ executionRef: "editor_task_v2", revision: "v2", parentDocumentId: v1().documentId, reviewId: "review_v1", selectedIssueIds: ["issue_review_v1"], text: "林霁推开钟楼的门，翻涌的潮水在门外停住。" });
 
     await expect(editor.create({
-      command: command("v3"), projectId: "project_001", chapterId: "chapter_001", documentId: "production:chapter_draft:chapter_001:v3", title: "第一章 V3", sourceDraftDocumentId: "production:chapter_draft:chapter_001:v2", reviewId: "review_v2", selectedIssueIds: ["issue_review_v2"], editedText: "林霁推开钟楼的门，翻涌的潮水在塔门外停住。", rationale: "澄清停驻位置。",
+      command: command("v3"), executionRef: "editor_task_v3", projectId: "project_001", chapterId: "chapter_001", documentId: "production:chapter_draft:chapter_001:v3", title: "第一章 V3", sourceDraftDocumentId: "production:chapter_draft:chapter_001:v2", reviewId: "review_v2", selectedIssueIds: ["issue_review_v2"], editedText: "林霁推开钟楼的门，翻涌的潮水在塔门外停住。", rationale: "澄清停驻位置。",
     })).resolves.toMatchObject({ kind: "ok", revision: 1 });
     await expect(editor.getDraft("production:chapter_draft:chapter_001:v3")).resolves.toMatchObject({ revision: "v3", parentDocumentId: "production:chapter_draft:chapter_001:v2", reviewId: "review_v2" });
     await expect(driver.query<{ document_id: string; status: string }>({ sql: "SELECT document_id, status FROM project_documents WHERE document_type = 'chapter_editor_draft' ORDER BY document_id", params: [] }))
@@ -69,9 +69,10 @@ describe("ChapterEditor Application Service", () => {
       baseDrafts: { getDraft: async () => v1() },
       reviews: { get: async () => review("review_v1", v1().documentId, "v1", "潮水") },
     });
-    const input = { projectId: "project_001", chapterId: "chapter_001", documentId: "production:chapter_draft:chapter_001:v2", title: "第一章 V2", sourceDraftDocumentId: v1().documentId, reviewId: "review_v1", selectedIssueIds: ["issue_review_v1"], rationale: "修正局部问题。" };
+    const input = { executionRef: "editor_task_invalid", projectId: "project_001", chapterId: "chapter_001", documentId: "production:chapter_draft:chapter_001:v2", title: "第一章 V2", sourceDraftDocumentId: v1().documentId, reviewId: "review_v1", selectedIssueIds: ["issue_review_v1"], rationale: "修正局部问题。" };
 
     await expect(editor.create({ command: command("rewrite"), ...input, editedText: "全新的另一章，人物和场景全部替换。" })).rejects.toThrow(/整章|范围/);
+    await expect(editor.create({ command: command("outside_range"), ...input, editedText: "林霁推开钟楼的窗，潮水在门外停住。" })).rejects.toThrow(/changed=\[/);
     await expect(editor.create({ command: command("wrong_scope"), ...input, selectedIssueIds: [], editedText: "林霁推开钟楼的门，潮水在塔门外停住。" })).rejects.toThrow(/选定|问题/);
     await expect(editor.create({ command: command("wrong_doc"), ...input, documentId: "production:chapter_draft:chapter_001:v3", editedText: "林霁推开钟楼的门，翻涌的潮水在门外停住。" })).rejects.toThrow(/V2|版本/);
   });
@@ -95,7 +96,7 @@ describe("ChapterEditor Application Service", () => {
 });
 
 function v1() {
-  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", taskId: "writer_task_001", revision: "v1" as const };
+  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", executionRef: "writer_task_001", revision: "v1" as const };
 }
 
 function review(reviewId: string, documentId: string, draftRevision: "v1" | "v2", quote: string): ChapterReview {

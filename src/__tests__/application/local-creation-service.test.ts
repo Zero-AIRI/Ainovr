@@ -97,11 +97,40 @@ describe("本地创作服务", () => {
     const creation = createLocalCreationService({
       driver, schemas, commands: application.commands, tasks: createTaskRunner(driver), objects: await createNodeObjectStore({ workspacePath }), caller, hostId: "test-host",
       defaultModelRole: "writer",
-      modelResolver: { resolve: vi.fn().mockResolvedValue({ role: "writer", providerProfileId: "local", baseURL: "http://localhost:11434/v1", model: "configured-writer", isCloud: false, cloudEscalation: "complex_only" }) },
+      modelResolver: { resolve: vi.fn().mockResolvedValue({ role: "writer", providerProfileId: "local", baseURL: "http://localhost:11434/v1", model: "configured-writer", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, isCloud: false, cloudEscalation: "complex_only" }) },
     });
     await creation.start({ command: commandBase(), taskId: "task_routed", documentId: "draft_routed", projectId: "project_001", title: "路由", prompt: "写作", baseURL: "http://attacker.invalid/v1", model: "attacker", maxTokens: 256 });
     await creation.run("task_routed");
     expect(caller.complete).toHaveBeenCalledWith(expect.objectContaining({ baseURL: "http://localhost:11434/v1", model: "configured-writer" }), expect.any(AbortSignal));
+  });
+
+  it("拒绝显式超过已解析 Provider/Workspace 上限的输出预算", async () => {
+    const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas });
+    await application.commands.execute(projectCommand());
+    const creation = createLocalCreationService({
+      driver, schemas, commands: application.commands, tasks: createTaskRunner(driver), objects: await createNodeObjectStore({ workspacePath }),
+      caller: { complete: vi.fn() }, hostId: "test-host", defaultModelRole: "writer",
+      modelResolver: { resolve: vi.fn().mockResolvedValue({ role: "writer", providerProfileId: "local", baseURL: "http://localhost:11434/v1", model: "configured-writer", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, isCloud: false, cloudEscalation: "complex_only" }) },
+    });
+    await expect(creation.start({
+      command: commandBase(), taskId: "task_budget_rejected", documentId: "draft_budget_rejected", projectId: "project_001", title: "预算", prompt: "写作", baseURL: "http://localhost:11434/v1", model: "ignored", maxTokens: 2048,
+    })).rejects.toThrow(/超过.*有效上限/);
+  });
+
+  it("在冻结任务前拒绝完整消息加输出和安全余量超过模型窗口的输入", async () => {
+    const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas });
+    await application.commands.execute(projectCommand());
+    const creation = createLocalCreationService({
+      driver, schemas, commands: application.commands, tasks: createTaskRunner(driver), objects: await createNodeObjectStore({ workspacePath }),
+      caller: { complete: vi.fn() }, hostId: "test-host", defaultModelRole: "reader",
+      modelResolver: { resolve: vi.fn().mockResolvedValue({ role: "reader", providerProfileId: "local", baseURL: "http://localhost:11434/v1", model: "qwen3:8b", protocol: "ollama_native", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, isCloud: false, cloudEscalation: "complex_only" }) },
+    });
+    await expect(creation.start({
+      command: commandBase(), taskId: "task_context_rejected", documentId: "reader_context_rejected", projectId: "project_001", title: "超窗 Reader", prompt: "字".repeat(4_000), baseURL: "http://localhost:11434/v1", model: "ignored", maxTokens: 512, outputMode: "structured_json",
+    })).rejects.toThrow(/上下文|窗口|预算/);
+    await expect(creation.getTask("task_context_rejected")).resolves.toBeNull();
   });
 
   it("模型表示长度截断时失败，不生成可提交草稿", async () => {

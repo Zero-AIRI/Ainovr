@@ -4,6 +4,7 @@ import type { CommandService } from "@/application/command-service";
 import type { LocalFactExtractionService } from "@/application/local-fact-extraction-service";
 import type { TaskRecord, TaskRunner } from "@/application/task-runner";
 import type { ObjectStore } from "@/persistence/object-store";
+import type { ModelResolver, ResolvedModelRoute } from "@/application/model-resolver";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -15,6 +16,7 @@ export interface StartLocalFactExtractionBatchInput {
   baseURL: string;
   model: string;
   maxTokens?: number;
+  frozenRoute?: ResolvedModelRoute;
 }
 
 export interface LocalFactExtractionBatchService {
@@ -31,6 +33,7 @@ export interface CreateLocalFactExtractionBatchServiceOptions {
   corpus: Pick<AnalysisCorpusService, "getOverview">;
   extraction: Pick<LocalFactExtractionService, "start" | "run" | "cancel" | "getTask">;
   hostId: string;
+  modelResolver?: ModelResolver;
   now?: () => number;
 }
 
@@ -45,7 +48,10 @@ export function createLocalFactExtractionBatchService(options: CreateLocalFactEx
 
   return {
     async start(input) {
-      const stored = toStoredInput(input);
+      const route = input.frozenRoute ?? (options.modelResolver ? await options.modelResolver.resolve({ role: "fact_extractor", complexity: "routine" }) : undefined);
+      if (route && route.role !== "fact_extractor") throw new Error("冻结的 Provider 路由不属于 FactExtractor。 ");
+      if (route && input.maxTokens !== undefined && input.maxTokens > route.maxOutputTokens) throw new Error(`请求输出预算 ${input.maxTokens} 超过当前 Provider/Workspace 有效上限 ${route.maxOutputTokens}。`);
+      const stored = toStoredInput(route ? { ...input, baseURL: route.baseURL, model: route.model, frozenRoute: route, ...(input.maxTokens === undefined ? { maxTokens: route.maxOutputTokens } : {}) } : input);
       const inputObject = await options.objects.put({
         content: encoder.encode(JSON.stringify(stored)),
         mediaType: "application/vnd.ainovr.local-fact-extraction-batch-input+json",
@@ -73,8 +79,10 @@ export function createLocalFactExtractionBatchService(options: CreateLocalFactEx
         if (!overview || overview.computeUnits.length === 0) throw new Error("AnalysisCorpus 不存在或没有可抽取计算单元。 ");
         const state = resumeState(await options.tasks.get(taskId), input.analysisProjectId, overview.computeUnits.length);
 
-        for (const unit of overview.computeUnits) {
-          if (unit.ordinal < state.nextOrdinal) continue;
+        const unitsByOrdinal = new Map(overview.computeUnits.map((unit) => [unit.ordinal, unit]));
+        const retryUnits = [...state.failedOrdinals].sort((left, right) => left - right).map((ordinal) => unitsByOrdinal.get(ordinal)).filter((unit): unit is NonNullable<typeof unit> => Boolean(unit));
+        const pendingUnits = overview.computeUnits.filter((unit) => unit.ordinal >= state.nextOrdinal && !state.failedOrdinals.includes(unit.ordinal));
+        for (const unit of [...retryUnits, ...pendingUnits]) {
           if (await cancelIfRequested(options.tasks, taskId, options.hostId)) return options.tasks.get(taskId);
 
           const childTaskId = childTaskIdFor(taskId, unit.ordinal);
@@ -82,6 +90,10 @@ export function createLocalFactExtractionBatchService(options: CreateLocalFactEx
           let child: TaskRecord | null = null;
           try {
             child = await options.extraction.getTask(childTaskId).catch(() => null);
+            if (child?.status === "failed" && state.failedOrdinals.includes(unit.ordinal)) {
+              await options.tasks.retry(childTaskId);
+              child = null;
+            }
             if (child?.status === "running" || child?.status === "queued") {
               child = await options.extraction.run(childTaskId);
             } else if (child?.status !== "succeeded" && child?.status !== "failed" && child?.status !== "cancelled") {
@@ -93,6 +105,7 @@ export function createLocalFactExtractionBatchService(options: CreateLocalFactEx
                 baseURL: input.baseURL,
                 model: input.model,
                 maxTokens: input.maxTokens,
+                ...(input.frozenRoute ? { frozenRoute: input.frozenRoute } : {}),
               });
               if (started.kind !== "accepted") throw new Error(`子 FactExtractor 未接受任务：${started.kind}。`);
               child = await options.extraction.run(childTaskId);
@@ -105,8 +118,19 @@ export function createLocalFactExtractionBatchService(options: CreateLocalFactEx
           }
 
           if (await cancelIfRequested(options.tasks, taskId, options.hostId)) return options.tasks.get(taskId);
-          if (child?.status === "succeeded") state.succeeded += 1;
-          else if (child?.status === "failed" || child?.status === "cancelled") state.failed += 1;
+          if (child?.status === "succeeded") {
+            if (state.failedOrdinals.includes(unit.ordinal)) {
+              state.failedOrdinals = state.failedOrdinals.filter((ordinal) => ordinal !== unit.ordinal);
+              state.failed = Math.max(0, state.failed - 1);
+            } else {
+              state.succeeded += 1;
+            }
+          } else if (child?.status === "failed" || child?.status === "cancelled") {
+            if (!state.failedOrdinals.includes(unit.ordinal)) {
+              state.failedOrdinals.push(unit.ordinal);
+              state.failed += 1;
+            }
+          }
           else throw new Error(`子 FactExtractor 未到达终态：${child?.status ?? "missing"}。`);
           state.nextOrdinal = unit.ordinal + 1;
           await options.tasks.checkpoint(taskId, options.hostId, checkpoint(input.analysisProjectId, state), null);
@@ -126,6 +150,14 @@ export function createLocalFactExtractionBatchService(options: CreateLocalFactEx
           })),
           mediaType: "application/vnd.ainovr.local-fact-extraction-batch-summary+json",
         });
+        if (state.failed > 0) {
+          await options.tasks.fail(taskId, options.hostId, {
+            code: "local_fact_extraction_batch_children_failed",
+            message: `${state.failed} 个计算单元仍未成功处置；可重试父任务以仅重跑失败单元。`,
+            retryable: true,
+          });
+          return options.tasks.get(taskId);
+        }
         const completed = await options.commands.execute({
           ...completionCommand(taskId, options.hostId, now()),
           tool: "complete_local_fact_extraction_batch",
@@ -170,12 +202,15 @@ interface StoredInput {
   baseURL: string;
   model: string;
   maxTokens: number;
+  frozenRoute?: ResolvedModelRoute;
 }
 
 interface BatchState {
   nextOrdinal: number;
   succeeded: number;
   failed: number;
+  failedOrdinals: number[];
+  retryCount: number;
 }
 
 function toStoredInput(input: StartLocalFactExtractionBatchInput): StoredInput {
@@ -184,7 +219,8 @@ function toStoredInput(input: StartLocalFactExtractionBatchInput): StoredInput {
   }
   const maxTokens = input.maxTokens ?? 1024;
   if (!Number.isInteger(maxTokens) || maxTokens < 256 || maxTokens > 16_384) throw new Error("maxTokens 必须介于 256 和 16384。 ");
-  return { schema_version: 1, taskId: input.taskId, analysisProjectId: input.analysisProjectId, baseURL: input.baseURL, model: input.model, maxTokens };
+  if (input.frozenRoute && (input.frozenRoute.role !== "fact_extractor" || input.frozenRoute.baseURL !== input.baseURL || input.frozenRoute.model !== input.model || !input.frozenRoute.providerProfileId.trim() || !input.frozenRoute.protocol || !Number.isInteger(input.frozenRoute.contextWindowTokens) || !Number.isInteger(input.frozenRoute.maxOutputTokens) || typeof input.frozenRoute.safetyMarginRatio !== "number")) throw new Error("冻结的 FactExtractor 路由无效。 ");
+  return { schema_version: 1, taskId: input.taskId, analysisProjectId: input.analysisProjectId, baseURL: input.baseURL, model: input.model, maxTokens, ...(input.frozenRoute ? { frozenRoute: structuredClone(input.frozenRoute) } : {}) };
 }
 
 async function readStoredInput(tasks: TaskRunner, objects: Pick<ObjectStore, "read">, taskId: string): Promise<StoredInput> {
@@ -200,7 +236,14 @@ function isStoredInput(value: unknown): value is StoredInput {
   const record = value as Record<string, unknown>;
   return record.schema_version === 1
     && ["taskId", "analysisProjectId", "baseURL", "model"].every((key) => typeof record[key] === "string" && (record[key] as string).trim())
-    && Number.isInteger(record.maxTokens) && Number(record.maxTokens) >= 256 && Number(record.maxTokens) <= 16_384;
+    && Number.isInteger(record.maxTokens) && Number(record.maxTokens) >= 256 && Number(record.maxTokens) <= 16_384
+    && (record.frozenRoute === undefined || isFrozenRoute(record.frozenRoute));
+}
+
+function isFrozenRoute(value: unknown): value is ResolvedModelRoute {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const route = value as Record<string, unknown>;
+  return route.role === "fact_extractor" && typeof route.providerProfileId === "string" && route.providerProfileId.trim().length > 0 && typeof route.baseURL === "string" && route.baseURL.trim().length > 0 && typeof route.model === "string" && route.model.trim().length > 0 && (route.protocol === "chat_completions" || route.protocol === "responses" || route.protocol === "ollama_native") && Number.isInteger(route.contextWindowTokens) && Number.isInteger(route.maxOutputTokens) && typeof route.safetyMarginRatio === "number" && typeof route.isCloud === "boolean" && (route.cloudEscalation === "never" || route.cloudEscalation === "complex_only" || route.cloudEscalation === "always");
 }
 
 function resumeState(task: TaskRecord | null, analysisProjectId: string, total: number): BatchState {
@@ -211,10 +254,15 @@ function resumeState(task: TaskRecord | null, analysisProjectId: string, total: 
       nextOrdinal: integer(value.nextOrdinal),
       succeeded: integer(value.succeeded),
       failed: integer(value.failed),
+      failedOrdinals: Array.isArray(value.failedOrdinals) ? value.failedOrdinals.filter((ordinal): ordinal is number => Number.isInteger(ordinal) && ordinal >= 1 && ordinal <= total) : [],
+      retryCount: integer(value.retryCount) ?? 0,
     }))
     .filter((value): value is BatchState => value.nextOrdinal !== null && value.succeeded !== null && value.failed !== null && value.nextOrdinal >= 1 && value.nextOrdinal <= total + 1);
-  if (states.length === 0) return { nextOrdinal: 1, succeeded: 0, failed: 0 };
-  return states.reduce((latest, candidate) => candidate.nextOrdinal > latest.nextOrdinal ? candidate : latest);
+  if (states.length === 0) return { nextOrdinal: 1, succeeded: 0, failed: 0, failedOrdinals: [], retryCount: task?.retryCount ?? 0 };
+  const currentRetry = task?.retryCount ?? 0;
+  const current = states.filter((state) => state.retryCount === currentRetry);
+  const selected = (current.length > 0 ? current : states).reduce((latest, candidate) => candidate.nextOrdinal > latest.nextOrdinal ? candidate : latest);
+  return selected.retryCount === currentRetry ? selected : { ...selected, retryCount: currentRetry };
 }
 
 function integer(value: unknown): number | null {
@@ -229,6 +277,8 @@ function checkpoint(analysisProjectId: string, state: BatchState): Record<string
     nextOrdinal: state.nextOrdinal,
     succeeded: state.succeeded,
     failed: state.failed,
+    failedOrdinals: [...state.failedOrdinals].sort((left, right) => left - right),
+    retryCount: state.retryCount,
   };
 }
 

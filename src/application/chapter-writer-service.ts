@@ -2,6 +2,7 @@ import type { CommandEnvelope, CommandResult } from "@/application/command-types
 import type { ChapterContextManifestService, WriterContextManifest } from "@/application/chapter-context-manifest-service";
 import type { LocalCreationService, LocalCreationDraft } from "@/application/local-creation-service";
 import type { TaskRecord } from "@/application/task-runner";
+import type { ResolvedModelRoute } from "@/application/model-resolver";
 
 export interface ChapterWriterDraft {
   documentId: string;
@@ -11,7 +12,7 @@ export interface ChapterWriterDraft {
   title: string;
   text: string;
   model: string;
-  taskId: string;
+  executionRef: string;
   revision: "v1";
 }
 
@@ -26,6 +27,7 @@ export interface ChapterWriterService {
     title: string;
     baseURL: string;
     model: string;
+    frozenRoute?: ResolvedModelRoute;
     maxTokens?: number;
   }): Promise<CommandResult>;
   run(taskId: string): Promise<TaskRecord | null>;
@@ -57,6 +59,7 @@ export function createChapterWriterService(options: {
         prompt,
         baseURL: input.baseURL,
         model: input.model,
+        ...(input.frozenRoute ? { frozenRoute: input.frozenRoute } : {}),
         ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
         metadata: { schema_version: 1, kind: "chapter_writer_draft", chapterId: input.chapterId, manifestId: input.manifestId, revision: "v1" },
       });
@@ -99,7 +102,7 @@ function assertWriterManifest(manifest: WriterContextManifest | null, projectId:
   if (!Array.isArray(manifest.layers) || manifest.layers.length !== expected.length || manifest.layers.some((layer, index) => layer.name !== expected[index])) throw new Error("Writer ContextManifest 缺少六层上下文。 ");
   const recipe = manifest.layers[5]?.value;
   const serialized = JSON.stringify(recipe);
-  if (/"(?:source|provenance|evidence|span|analysisProjectId)"/i.test(serialized)) throw new Error("Writer ContextManifest 含来源侧字段。 ");
+  if (/(?:"(?:source|provenance|evidence|span|analysisProjectId)"|reference|参考作品|原文摘录|sourceHash|exactTextHash|spanId|《[^》]+》)/i.test(serialized)) throw new Error("Writer ContextManifest 含来源侧字段或文本值。 ");
 }
 
 function chapterDraft(draft: LocalCreationDraft): ChapterWriterDraft | null {
@@ -113,7 +116,7 @@ function chapterDraft(draft: LocalCreationDraft): ChapterWriterDraft | null {
     title: draft.title,
     text: draft.text,
     model: draft.model,
-    taskId: draft.taskId,
+    executionRef: draft.taskId,
     revision: "v1",
   };
 }

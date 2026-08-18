@@ -109,7 +109,7 @@ export function createResearchDossierService(options: CreateResearchDossierServi
 
     async getLatest(analysisProjectId) {
       const rows = await options.driver.query<{ payload_object_hash: string }>({
-        sql: "SELECT payload_object_hash FROM research_dossiers WHERE analysis_project_id = ? ORDER BY revision DESC LIMIT 1",
+        sql: "SELECT payload_object_hash FROM research_dossiers WHERE analysis_project_id = ? AND stale = 0 ORDER BY revision DESC LIMIT 1",
         params: [analysisProjectId],
       });
       const row = rows[0];
@@ -144,11 +144,18 @@ async function assertDossierPrerequisites(driver: SqlDriver, analysisProjectId: 
       params: [analysisProjectId],
     }),
     driver.query<{ analysis_unit_id: string | null; status: string }>({
-      sql: "SELECT analysis_unit_id, status FROM coverage_entries WHERE analysis_project_id = ? AND module = 'fact_ledger'",
+      sql: `SELECT analysis_unit_id, status FROM (
+              SELECT entry.analysis_unit_id, entry.status,
+                     ROW_NUMBER() OVER (PARTITION BY entry.analysis_project_id, entry.module, COALESCE(entry.analysis_unit_id, '') ORDER BY entry.created_at DESC, entry.coverage_entry_id DESC) AS rn
+              FROM coverage_entries entry WHERE entry.analysis_project_id = ? AND entry.module = 'fact_ledger'
+            ) latest WHERE rn = 1`,
       params: [analysisProjectId],
     }),
     driver.query<{ status: string }>({
-      sql: "SELECT status FROM coverage_entries WHERE analysis_project_id = ? AND module = 'thread_graph' ORDER BY created_at DESC",
+      sql: `SELECT status FROM (
+              SELECT entry.status, ROW_NUMBER() OVER (PARTITION BY entry.analysis_project_id, entry.module, COALESCE(entry.analysis_unit_id, '') ORDER BY entry.created_at DESC, entry.coverage_entry_id DESC) AS rn
+              FROM coverage_entries entry WHERE entry.analysis_project_id = ? AND entry.module = 'thread_graph'
+            ) latest WHERE rn = 1`,
       params: [analysisProjectId],
     }),
   ]);

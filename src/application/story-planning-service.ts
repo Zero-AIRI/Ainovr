@@ -59,8 +59,7 @@ export function createStoryPlanningService(options: { driver: SqlDriver; command
     async saveBookOutline(input) { await selected(options.driver, input.projectId); assertOutline(input.outline); return save(input.command, input.projectId, "book_outline", input.outline); },
     async saveStagePlan(input) { await selected(options.driver, input.projectId); assertStage(input.stage); return save(input.command, input.projectId, "stage_plan", input.stage, undefined, planningDocumentId(input.projectId, "stage_plan", nonEmpty(input.stage.stageId, "stageId"))); },
     async saveChapterContract(input) {
-      const mechanismCardIds = assertChapter(input.contract);
-      await assertAdoptedMechanisms(options.driver, input.projectId, mechanismCardIds);
+      assertChapter(input.contract);
       return save(input.command, input.projectId, "chapter_contract", input.contract, undefined, planningDocumentId(input.projectId, "chapter_contract", nonEmpty(input.contract.chapterId, "chapterId")));
     },
     async reviewDocument(input) {
@@ -132,28 +131,15 @@ function assertContract(v: RecordValue) { for (const key of ["corePromise", "cen
 function assertSystem(v: RecordValue) { for (const key of ["worldRules", "characterSystem", "causalityRules", "informationRules"] as const) strings(v[key], key, true); }
 function assertOutline(v: RecordValue) { if (!Array.isArray(v.acts) || v.acts.length === 0) throw new Error("acts 必须是非空数组。 "); for (const [index, value] of v.acts.entries()) { const act = record(value); nonEmpty(act.id, `acts[${index}].id`); nonEmpty(act.purpose, `acts[${index}].purpose`); if (!Array.isArray(act.chapterRange) || act.chapterRange.length !== 2 || !act.chapterRange.every((item) => Number.isInteger(item) && Number(item) > 0) || Number(act.chapterRange[0]) > Number(act.chapterRange[1])) throw new Error(`acts[${index}].chapterRange 非法。`); } strings(v.endingDependencies, "endingDependencies", true); }
 function assertStage(v: RecordValue) { for (const key of ["stageId", "objective", "entryCondition", "exitCondition", "readerExpectation"] as const) nonEmpty(v[key], key); strings(v.chapterIds, "chapterIds", true); }
-function assertChapter(v: RecordValue): string[] {
+function assertChapter(v: RecordValue): void {
   for (const key of ["chapterId", "desire", "pressure", "turningPoint", "emotionalCycle"] as const) nonEmpty(v[key], key);
   if (!Number.isInteger(v.ordinal) || Number(v.ordinal) < 1) throw new Error("ordinal 非法。 ");
   for (const key of ["entryState", "exitState", "mustNotHappen", "nextChapterInterface"] as const) strings(v[key], key, key !== "mustNotHappen");
-  const mechanismCardIds = strings(v.mechanismCardIds, "mechanismCardIds", false);
-  if (mechanismCardIds.length > 3) throw new Error("ChapterContract 最多激活三张 Writer 机制卡。 ");
+  if (Object.prototype.hasOwnProperty.call(v, "mechanismCardIds")) throw new Error("ChapterContract 不再保存方法卡选择；请创建本章采用记录。 ");
   if (!["establish", "reinforce", "delay", "payoff", "transform"].includes(v.readerPromiseAction as string)) throw new Error("readerPromiseAction 无效。 ");
-  return mechanismCardIds;
 }
 function validConcept(value: unknown): boolean { const v = record(value); try { for (const key of ["id", "title", "premise", "centralConflict", "novelty", "endingDirection"] as const) nonEmpty(v[key], key); return true; } catch { return false; } }
 function record(value: unknown): RecordValue { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("字段必须是对象。 "); return value as RecordValue; }
 function parse(value: string): RecordValue { try { return record(JSON.parse(value)); } catch { throw new Error("输出必须是 JSON 对象。 "); } }
-async function assertAdoptedMechanisms(driver: SqlDriver, projectId: string, mechanismCardIds: readonly string[]): Promise<void> {
-  if (mechanismCardIds.length === 0) return;
-  const placeholders = mechanismCardIds.map(() => "?").join(", ");
-  const rows = await driver.query<{ mechanism_asset_id: string }>({
-    sql: `SELECT DISTINCT mechanism_asset_id FROM mechanism_adoptions WHERE project_id = ? AND status = 'adopted' AND mechanism_asset_id IN (${placeholders})`,
-    params: [projectId, ...mechanismCardIds],
-  });
-  const adopted = new Set(rows.map((row) => row.mechanism_asset_id));
-  const missing = mechanismCardIds.filter((id) => !adopted.has(id));
-  if (missing.length > 0) throw new Error(`ChapterContract 只能选择当前项目已采纳的机制资产：${missing.join("、")}。`);
-}
 function strings(value: unknown, key: string, required: boolean): string[] { if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim()) || (required && value.length === 0) || new Set(value).size !== value.length) throw new Error(`${key} 必须是非空且无重复的字符串数组。`); return value as string[]; }
 function nonEmpty(value: unknown, key: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${key} 必须是非空字符串。`); return value; }

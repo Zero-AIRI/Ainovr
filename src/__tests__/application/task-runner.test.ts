@@ -91,6 +91,19 @@ describe("TaskRunner", () => {
     await expect(runner.get("task_001")).resolves.toMatchObject({ status: "queued", retryCount: 1, leaseOwner: null });
   });
 
+  it("持有 lease 的宿主崩溃后，另一宿主接管 cancel_requested 并可重试", async () => {
+    let clock = 1_700_000_000_000;
+    const runner = createTaskRunner(driver, { now: () => clock, leaseDurationMs: 60_000 });
+    await runner.enqueue({ taskId: "task_crashed_cancel", resourceKey: "analysis:crashed-cancel", taskType: "reference_analysis", inputObjectHash: null });
+    await runner.claim("task_crashed_cancel", "host_a");
+    await runner.requestCancel("task_crashed_cancel");
+    clock += 60_001;
+    await expect(runner.claim("task_crashed_cancel", "host_b")).resolves.toMatchObject({ claimed: false, status: "cancelled" });
+    await expect(runner.get("task_crashed_cancel")).resolves.toMatchObject({ status: "cancelled", leaseOwner: null });
+    await runner.retry("task_crashed_cancel");
+    await expect(runner.get("task_crashed_cancel")).resolves.toMatchObject({ status: "queued", retryCount: 1 });
+  });
+
   it("没有 lease 的排队、等待确认和暂停任务也能完成取消", async () => {
     const runner = createTaskRunner(driver, { now: () => 1_700_000_000_000 });
     for (const [taskId, status] of [["queued", "queued"], ["waiting", "waiting_confirmation"], ["paused", "paused"]] as const) {

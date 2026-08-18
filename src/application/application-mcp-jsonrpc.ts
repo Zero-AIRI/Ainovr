@@ -13,6 +13,12 @@ import type { EvidenceWorkbenchService } from "@/application/evidence-workbench-
 import type { MechanismAssetService } from "@/application/mechanism-asset-service";
 import type { StoryPlanningService } from "@/application/story-planning-service";
 import type { CreativeRecipeService } from "@/application/creative-recipe-service";
+import type { ChapterMechanismApplicationService } from "@/application/chapter-mechanism-application-service";
+import type { ChapterMechanismOutcomeService } from "@/application/chapter-mechanism-outcome-service";
+import type { MechanismEffectExperimentService } from "@/application/mechanism-effect-experiment-service";
+import type { MechanismEffectExperimentWriterService } from "@/application/mechanism-effect-experiment-writer-service";
+import type { MechanismEffectExperimentBlindReviewService } from "@/application/mechanism-effect-experiment-blind-review-service";
+import type { ChapterMethodWorkbenchService } from "@/application/chapter-method-workbench-service";
 import type { ChapterContextManifestService } from "@/application/chapter-context-manifest-service";
 import type { ChapterReaderManifestService } from "@/application/chapter-reader-manifest-service";
 import type { ChapterReviewService } from "@/application/chapter-review-service";
@@ -30,6 +36,9 @@ import type { WorkspaceApplicationService } from "@/application/workspace-applic
 import type { WorkspaceMaintenanceService } from "@/application/workspace-maintenance-service";
 import type { WorkspaceExportService } from "@/application/workspace-export-service";
 import type { PipelineRevisionService } from "@/application/pipeline-revision-service";
+import type { PipelineRunView } from "@/application/pipeline-run-service";
+import type { ModelRole } from "@/application/model-resolver";
+import { shouldAutoStartTask } from "@/application/automation-policy";
 
 export interface ApplicationMcpJsonRpcRequest {
   jsonrpc: "2.0";
@@ -70,14 +79,14 @@ const TOOLS: ToolDefinition[] = [
   { name: "list_pending_planning_documents", description: "读取待人类审核的原创规划索引；不返回完整 Prompt。", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
   { name: "list_coverage_gaps", description: "读取全工作区未 complete 的 Coverage 处置和原因；不返回参考原文。", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
   { name: "list_provider_profiles", description: "读取非秘密 Provider 与角色路由；不返回 API Key。", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
-  { name: "save_provider_profile", description: "版本化保存非秘密 Provider 与角色路由；不接受 API Key，更新必须携带 expectedRevision。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, providerProfileId: STRING, name: STRING, baseURL: STRING, defaultModel: STRING, routes: { type: "array", items: { type: "object", properties: { role: STRING, model: STRING }, required: ["role", "model"], additionalProperties: false } }, expectedRevision: { type: "integer", minimum: 1 } }, required: ["commandId", "idempotencyKey", "correlationId", "providerProfileId", "name", "baseURL", "defaultModel", "routes"], additionalProperties: false } },
+  { name: "save_provider_profile", description: "版本化保存非秘密 Provider 协议、模型能力预算与角色路由；不接受 API Key，更新必须携带 expectedRevision。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, providerProfileId: STRING, name: STRING, baseURL: STRING, protocol: { type: "string", enum: ["chat_completions", "responses", "ollama_native"] }, defaultModel: STRING, contextWindowTokens: { type: "integer", minimum: 1024, maximum: 1000000 }, maxOutputTokens: { type: "integer", minimum: 256, maximum: 999999 }, safetyMarginRatio: { type: "number", minimum: 0, exclusiveMaximum: 1 }, routes: { type: "array", items: { type: "object", properties: { role: STRING, model: STRING }, required: ["role", "model"], additionalProperties: false } }, expectedRevision: { type: "integer", minimum: 1 } }, required: ["commandId", "idempotencyKey", "correlationId", "providerProfileId", "name", "baseURL", "protocol", "defaultModel", "contextWindowTokens", "maxOutputTokens", "safetyMarginRatio", "routes"], additionalProperties: false } },
   { name: "get_workspace_settings", description: "读取非秘密的 DataPolicy、上下文/输出预算和自动化模式。", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
   { name: "get_evidence_excerpt", description: "只按已登记 EvidenceInstance 读取有上限的原文摘录。", inputSchema: { type: "object", properties: { evidenceInstanceId: STRING }, required: ["evidenceInstanceId"], additionalProperties: false } },
   { name: "save_workspace_settings", description: "版本化保存非秘密 DataPolicy、上下文/输出预算和自动化模式；更新必须携带 expectedRevision。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, automationMode: { type: "string", enum: ["manual", "supervised", "autonomous"] }, contextWindowTokens: { type: "integer", minimum: 1024, maximum: 1000000 }, maxOutputTokens: { type: "integer", minimum: 256, maximum: 999999 }, safetyMarginRatio: { type: "number", minimum: 0, exclusiveMaximum: 1 }, cloudEscalation: { type: "string", enum: ["never", "complex_only", "always"] }, expectedRevision: { type: "integer", minimum: 1 } }, required: ["commandId", "idempotencyKey", "correlationId", "automationMode", "contextWindowTokens", "maxOutputTokens", "safetyMarginRatio", "cloudEscalation"], additionalProperties: false } },
 ];
 const PIPELINE_TOOLS: ToolDefinition[] = [
   { name: "list_pipeline_revisions", description: "读取可编辑的领域 PipelineRevision 列表。", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
-  { name: "save_pipeline_revision", description: "保存受领域工具白名单约束的线性 PipelineRevision。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, pipelineId: STRING, name: STRING, status: STRING, expectedRevision: { type: "integer", minimum: 1 }, steps: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", properties: { id: STRING, tool: STRING, enabled: { type: "boolean" }, config: { type: "object" } }, required: ["id", "tool", "enabled"], additionalProperties: false } } }, required: ["commandId", "idempotencyKey", "correlationId", "pipelineId", "name", "steps"], additionalProperties: false } },
+  { name: "save_pipeline_revision", description: "保存受领域工具白名单约束、显式依赖的 PipelineRevision。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, pipelineId: STRING, name: STRING, status: STRING, expectedRevision: { type: "integer", minimum: 1 }, steps: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", properties: { id: STRING, tool: STRING, enabled: { type: "boolean" }, execution: { type: "string", enum: ["executable", "agent_action", "human_review"] }, dependsOn: { type: "array", maxItems: 31, items: STRING }, config: { type: "object" } }, required: ["id", "tool", "enabled"], additionalProperties: false } } }, required: ["commandId", "idempotencyKey", "correlationId", "pipelineId", "name", "steps"], additionalProperties: false } },
   { name: "start_pipeline_run", description: "冻结当前 PipelineRevision 并创建可审计的人工复核运行；仅具备显式宿主映射的步骤可启动，其余仍须由对应领域工具完成。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, runId: STRING, pipelineId: STRING, projectId: STRING }, required: ["commandId", "idempotencyKey", "correlationId", "runId", "pipelineId"], additionalProperties: false } },
   { name: "list_pipeline_runs", description: "读取最近受控 PipelineRun 与每一步的人类复核 checkpoint。", inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 100 } }, required: [], additionalProperties: false } },
   { name: "get_pipeline_run", description: "读取一个冻结 PipelineRun 及其节点复核状态。", inputSchema: { type: "object", properties: { runId: STRING }, required: ["runId"], additionalProperties: false } },
@@ -278,6 +287,24 @@ const STORY_PLANNING_TOOLS: ToolDefinition[] = [
   { name: "list_project_planning_documents", description: "读取项目当前规划文档 revision。", inputSchema: { type: "object", properties: { projectId: STRING }, required: ["projectId"], additionalProperties: false } },
 ];
 
+const CHAPTER_METHOD_TOOLS: ToolDefinition[] = [
+  { name: "save_chapter_mechanism_application", description: "版本化保存一张已采纳写作方法卡的本章采用记录；不接受来源证据、对象路径或任意 ID 关系。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, chapterId: STRING, expectedRevision: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] }, application: { type: "object" } }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "chapterId", "expectedRevision", "application"], additionalProperties: false } },
+  { name: "get_chapter_mechanism_application", description: "读取当前本章采用记录；过期记录不会作为当前事实返回。", inputSchema: { type: "object", properties: { projectId: STRING, chapterId: STRING }, required: ["projectId", "chapterId"], additionalProperties: false } },
+  { name: "save_chapter_mechanism_outcome", description: "保存不可覆盖 Reviewer 报告的人类逐项处置及最终本章应用结果。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, chapterId: STRING, expectedRevision: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] }, outcome: { type: "object" } }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "chapterId", "expectedRevision", "outcome"], additionalProperties: false } },
+  { name: "get_chapter_mechanism_outcome", description: "读取当前本章应用结果；过期结果不会作为当前事实返回。", inputSchema: { type: "object", properties: { projectId: STRING, chapterId: STRING }, required: ["projectId", "chapterId"], additionalProperties: false } },
+  { name: "get_chapter_method_workbench", description: "读取单章单卡作者工作台聚合投影；不返回完整正文、Prompt、对象路径或参考原文。", inputSchema: { type: "object", properties: { projectId: STRING, chapterId: STRING }, required: ["projectId", "chapterId"], additionalProperties: false } },
+];
+
+const MECHANISM_EFFECT_EXPERIMENT_TOOLS: ToolDefinition[] = [
+  { name: "save_mechanism_effect_experiment", description: "版本化保存 P6 三组匿名配对机制效用实验；A/B 映射只写入 ObjectStore，结论由领域服务计算。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, expectedRevision: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] }, experiment: { type: "object" } }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "expectedRevision", "experiment"], additionalProperties: false } },
+  { name: "get_mechanism_effect_experiment", description: "读取机制效用实验的匿名投影与计算结论；不返回 A/B 映射、完整草稿、Prompt 或来源证据。", inputSchema: { type: "object", properties: { projectId: STRING, experimentId: STRING }, required: ["projectId", "experimentId"], additionalProperties: false } },
+  { name: "start_mechanism_effect_experiment_candidate", description: "从同一冻结 Writer ContextManifest 启动 P6 匿名候选；仅 CreativeRecipe 的空集/单张已采纳方法卡会发生变化。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, experimentId: STRING, pairId: STRING, candidateId: STRING, sourceManifestId: STRING, taskId: STRING, title: STRING }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "experimentId", "pairId", "candidateId", "sourceManifestId", "taskId", "title"], additionalProperties: false } },
+  { name: "resume_mechanism_effect_experiment_candidate", description: "由当前 MCP 宿主接管已排队的 P6 匿名候选 Writer 任务。", inputSchema: { type: "object", properties: { taskId: STRING }, required: ["taskId"], additionalProperties: false } },
+  { name: "start_mechanism_effect_experiment_blind_review", description: "只以 ChapterContract、共同信号和匿名正文启动独立 P6 盲评；不传递方法、组别或来源。", inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, experimentId: STRING, pairId: STRING, sourceManifestId: STRING, taskId: STRING, documentId: STRING, title: STRING }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "experimentId", "pairId", "sourceManifestId", "taskId", "documentId", "title"], additionalProperties: false } },
+  { name: "resume_mechanism_effect_experiment_blind_review", description: "由当前 MCP 宿主接管已排队的 P6 匿名盲评任务。", inputSchema: { type: "object", properties: { taskId: STRING }, required: ["taskId"], additionalProperties: false } },
+  { name: "get_mechanism_effect_experiment_blind_review", description: "读取已验证的结构化匿名盲评；不返回 A/B 映射或来源信息。", inputSchema: { type: "object", properties: { documentId: STRING }, required: ["documentId"], additionalProperties: false } },
+];
+
 const CREATIVE_RECIPE_TOOLS: ToolDefinition[] = [
   {
     name: "create_creative_recipe",
@@ -414,12 +441,27 @@ const CHAPTER_REVIEWER_TOOLS: ToolDefinition[] = [
 
 const CHAPTER_PRODUCTION_TOOLS: ToolDefinition[] = [
   {
+    name: "save_chapter_production_commit_proposal",
+    description: "由外部 Agent 保存一份版本化的章节连续性提交提案；作者界面不会编辑其中的 Canon、人物知识、读者状态、Promise 或大纲偏移。",
+    inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, chapterId: STRING, expectedRevision: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] }, proposal: { type: "object" } }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "chapterId", "expectedRevision", "proposal"], additionalProperties: false },
+  },
+  {
+    name: "get_chapter_production_commit_proposal",
+    description: "读取当前正式提交提案的安全摘要；不返回连续性 patch 的原始 JSON。",
+    inputSchema: { type: "object", properties: { projectId: STRING, chapterId: STRING }, required: ["projectId", "chapterId"], additionalProperties: false },
+  },
+  {
+    name: "request_chapter_production_commit",
+    description: "由作者以当前提案标识发起正式章节持久确认；服务会重新读取并校验提案、草稿、方法处置和所有 revision。",
+    inputSchema: { type: "object", properties: { commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, chapterId: STRING, proposalId: STRING }, required: ["commandId", "idempotencyKey", "correlationId", "projectId", "chapterId", "proposalId"], additionalProperties: false },
+  },
+  {
     name: "commit_chapter",
     description: "以 human_via_agent 选择一个已存在的 V1/V2/V3 草稿作为正式章节；会持久化确认，再原子提交正文、Canon、人物知识、ReaderState、ReaderPromise 和 OutlineDrift。",
     inputSchema: {
       type: "object",
       properties: {
-        commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, chapterId: STRING, chapterOrdinal: { type: "integer", minimum: 1 }, draftDocumentId: STRING, productionCommitId: STRING,
+        commandId: STRING, idempotencyKey: STRING, correlationId: STRING, projectId: STRING, chapterId: STRING, chapterOrdinal: { type: "integer", minimum: 1 }, draftDocumentId: STRING, productionCommitId: STRING, outcomeId: STRING,
         chapterDelta: { type: "object" }, canonPatches: { type: "array" }, characterKnowledgePatches: { type: "array" }, readerState: { type: "object" }, readerPromiseUpdates: { type: "array" }, outlineDrift: { type: "object" },
       },
       required: ["commandId", "idempotencyKey", "correlationId", "projectId", "chapterId", "chapterOrdinal", "draftDocumentId", "productionCommitId", "chapterDelta", "canonPatches", "characterKnowledgePatches", "readerState", "readerPromiseUpdates", "outlineDrift"],
@@ -463,6 +505,8 @@ function planningDocumentTool(kind: string, field: string): ToolDefinition {
 
 export interface ApplicationMcpOptions {
   application: WorkspaceApplicationService;
+  /** Only the embedded desktop sidecar may set this trusted transport mode. */
+  transport?: "stdio" | "desktop_ui";
   tasks?: TaskRunner;
   creation?: LocalCreationService;
   maintenance?: WorkspaceMaintenanceService;
@@ -482,6 +526,12 @@ export interface ApplicationMcpOptions {
   workbench?: EvidenceWorkbenchService;
   mechanisms?: MechanismAssetService;
   planning?: StoryPlanningService;
+  chapterApplications?: ChapterMechanismApplicationService;
+  chapterOutcomes?: ChapterMechanismOutcomeService;
+  mechanismEffectExperiments?: MechanismEffectExperimentService;
+  mechanismEffectWriter?: MechanismEffectExperimentWriterService;
+  mechanismEffectBlindReview?: MechanismEffectExperimentBlindReviewService;
+  chapterMethodWorkbench?: ChapterMethodWorkbenchService;
   recipes?: CreativeRecipeService;
   manifests?: ChapterContextManifestService;
   readerManifests?: ChapterReaderManifestService;
@@ -497,9 +547,9 @@ export interface ApplicationMcpOptions {
 
 /** 新 MCP 语义层：没有 SQL、settings、文件或 Zustand 访问入口。 */
 export function createApplicationMcpJsonRpcHandler(input: WorkspaceApplicationService | ApplicationMcpOptions) {
-  const { application, tasks, creation, maintenance, exporter, references, referenceFileImport, corpus, facts, maps, factExtraction, batchFactExtraction, threads, brief, conclusions, falsification, dossier, workbench, mechanisms, planning, recipes, manifests, readerManifests, reviews, editor, editorTasks, readers, reviewer, production, writer, pipelines } = "application" in input ? input : { application: input };
+  const { application, tasks, creation, maintenance, exporter, references, referenceFileImport, corpus, facts, maps, factExtraction, batchFactExtraction, threads, brief, conclusions, falsification, dossier, workbench, mechanisms, planning, chapterApplications, chapterOutcomes, mechanismEffectExperiments, mechanismEffectWriter, mechanismEffectBlindReview, chapterMethodWorkbench, recipes, manifests, readerManifests, reviews, editor, editorTasks, readers, reviewer, production, writer, pipelines, transport = "stdio" } = "application" in input ? input : { application: input };
   const tools = [
-    ...TOOLS, ...CONFIRMATION_TOOLS, ...(pipelines ? PIPELINE_TOOLS : []), ...(tasks ? TASK_TOOLS : []), ...(creation ? LOCAL_CREATION_TOOLS : []), ...(maintenance ? WORKSPACE_MAINTENANCE_TOOLS : []), ...(exporter ? WORKSPACE_EXPORT_TOOLS : []), ...(factExtraction ? LOCAL_FACT_EXTRACTION_TOOLS : []), ...(batchFactExtraction ? LOCAL_FACT_EXTRACTION_BATCH_TOOLS : []), ...(references || referenceFileImport ? REFERENCE_TOOLS : []), ...(corpus ? ANALYSIS_TOOLS : []), ...(maps ? READING_MAP_TOOLS : []), ...(facts ? FACT_LEDGER_TOOLS : []), ...(threads ? THREAD_GRAPH_TOOLS : []), ...(brief ? ANALYSIS_BRIEF_TOOLS : []), ...(conclusions ? RESEARCH_CONCLUSION_TOOLS : []), ...(falsification ? INDEPENDENT_FALSIFICATION_TOOLS : []), ...(dossier ? RESEARCH_DOSSIER_TOOLS : []), ...(workbench ? EVIDENCE_WORKBENCH_TOOLS : []), ...(mechanisms ? MECHANISM_ASSET_TOOLS : []), ...(planning ? STORY_PLANNING_TOOLS : []), ...(recipes ? CREATIVE_RECIPE_TOOLS : []), ...(manifests ? CHAPTER_CONTEXT_MANIFEST_TOOLS : []), ...(readerManifests ? CHAPTER_READER_MANIFEST_TOOLS : []), ...(readers ? CHAPTER_READER_TOOLS : []), ...(reviewer ? CHAPTER_REVIEWER_TOOLS : []), ...(reviews ? CHAPTER_REVIEW_TOOLS : []), ...(editor ? CHAPTER_EDITOR_TOOLS : []), ...(editorTasks ? CHAPTER_EDITOR_TASK_TOOLS : []), ...(production ? CHAPTER_PRODUCTION_TOOLS : []), ...(writer ? CHAPTER_WRITER_TOOLS : []),
+    ...TOOLS, ...CONFIRMATION_TOOLS, ...(chapterApplications && chapterOutcomes && chapterMethodWorkbench ? CHAPTER_METHOD_TOOLS : []), ...(mechanismEffectExperiments && mechanismEffectWriter && mechanismEffectBlindReview ? MECHANISM_EFFECT_EXPERIMENT_TOOLS : []), ...(pipelines ? PIPELINE_TOOLS : []), ...(tasks ? TASK_TOOLS : []), ...(creation ? LOCAL_CREATION_TOOLS : []), ...(maintenance ? WORKSPACE_MAINTENANCE_TOOLS : []), ...(exporter ? WORKSPACE_EXPORT_TOOLS : []), ...(factExtraction ? LOCAL_FACT_EXTRACTION_TOOLS : []), ...(batchFactExtraction ? LOCAL_FACT_EXTRACTION_BATCH_TOOLS : []), ...(references || referenceFileImport ? REFERENCE_TOOLS : []), ...(corpus ? ANALYSIS_TOOLS : []), ...(maps ? READING_MAP_TOOLS : []), ...(facts ? FACT_LEDGER_TOOLS : []), ...(threads ? THREAD_GRAPH_TOOLS : []), ...(brief ? ANALYSIS_BRIEF_TOOLS : []), ...(conclusions ? RESEARCH_CONCLUSION_TOOLS : []), ...(falsification ? INDEPENDENT_FALSIFICATION_TOOLS : []), ...(dossier ? RESEARCH_DOSSIER_TOOLS : []), ...(workbench ? EVIDENCE_WORKBENCH_TOOLS : []), ...(mechanisms ? MECHANISM_ASSET_TOOLS : []), ...(planning ? STORY_PLANNING_TOOLS : []), ...(recipes ? CREATIVE_RECIPE_TOOLS : []), ...(manifests ? CHAPTER_CONTEXT_MANIFEST_TOOLS : []), ...(readerManifests ? CHAPTER_READER_MANIFEST_TOOLS : []), ...(readers ? CHAPTER_READER_TOOLS : []), ...(reviewer ? CHAPTER_REVIEWER_TOOLS : []), ...(reviews ? CHAPTER_REVIEW_TOOLS : []), ...(editor ? CHAPTER_EDITOR_TOOLS : []), ...(editorTasks ? CHAPTER_EDITOR_TASK_TOOLS : []), ...(production ? CHAPTER_PRODUCTION_TOOLS : []), ...(writer ? CHAPTER_WRITER_TOOLS : []),
   ];
   return async (request: ApplicationMcpJsonRpcRequest): Promise<Record<string, unknown> | null> => {
     if (!request || request.jsonrpc !== "2.0" || typeof request.method !== "string") return error(request?.id ?? null, -32600, "Invalid Request");
@@ -514,7 +564,7 @@ export function createApplicationMcpJsonRpcHandler(input: WorkspaceApplicationSe
     const args = record(params?.arguments);
     if (!args) return error(request.id, -32602, "tools/call arguments 必须是对象");
     try {
-      const output = await callTool(application, tasks, creation, maintenance, exporter, references, referenceFileImport, corpus, facts, maps, factExtraction, batchFactExtraction, threads, brief, conclusions, falsification, dossier, workbench, mechanisms, planning, recipes, manifests, readerManifests, reviews, editor, editorTasks, readers, reviewer, production, writer, pipelines, name, args);
+      const output = await callTool(application, tasks, creation, maintenance, exporter, references, referenceFileImport, corpus, facts, maps, factExtraction, batchFactExtraction, threads, brief, conclusions, falsification, dossier, workbench, mechanisms, planning, chapterApplications, chapterOutcomes, mechanismEffectExperiments, mechanismEffectWriter, mechanismEffectBlindReview, chapterMethodWorkbench, recipes, manifests, readerManifests, reviews, editor, editorTasks, readers, reviewer, production, writer, pipelines, transport, name, args);
       return success(request.id, { content: [{ type: "text", text: JSON.stringify(output, null, 2) }], structuredContent: output, isError: false });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "MCP tool failed";
@@ -523,7 +573,7 @@ export function createApplicationMcpJsonRpcHandler(input: WorkspaceApplicationSe
   };
 }
 
-async function callTool(application: WorkspaceApplicationService, tasks: TaskRunner | undefined, creation: LocalCreationService | undefined, maintenance: WorkspaceMaintenanceService | undefined, exporter: WorkspaceExportService | undefined, references: ReferenceImportService | undefined, referenceFileImport: ReferenceFileImportService | undefined, corpus: AnalysisCorpusService | undefined, facts: AnalysisFactService | undefined, maps: StructuralReadingMapService | undefined, factExtraction: LocalFactExtractionService | undefined, batchFactExtraction: LocalFactExtractionBatchService | undefined, threads: ThreadGraphService | undefined, brief: AnalysisBriefService | undefined, conclusions: ResearchConclusionService | undefined, falsification: IndependentFalsificationService | undefined, dossier: ResearchDossierService | undefined, workbench: EvidenceWorkbenchService | undefined, mechanisms: MechanismAssetService | undefined, planning: StoryPlanningService | undefined, recipes: CreativeRecipeService | undefined, manifests: ChapterContextManifestService | undefined, readerManifests: ChapterReaderManifestService | undefined, reviews: ChapterReviewService | undefined, editor: ChapterEditorService | undefined, editorTasks: ChapterEditorTaskService | undefined, readers: ChapterReaderService | undefined, reviewer: ChapterReviewerService | undefined, production: ChapterProductionCommitService | undefined, writer: ChapterWriterService | undefined, pipelines: PipelineRevisionService | undefined, name: string, args: Record<string, unknown>): Promise<unknown> {
+async function callTool(application: WorkspaceApplicationService, tasks: TaskRunner | undefined, creation: LocalCreationService | undefined, maintenance: WorkspaceMaintenanceService | undefined, exporter: WorkspaceExportService | undefined, references: ReferenceImportService | undefined, referenceFileImport: ReferenceFileImportService | undefined, corpus: AnalysisCorpusService | undefined, facts: AnalysisFactService | undefined, maps: StructuralReadingMapService | undefined, factExtraction: LocalFactExtractionService | undefined, batchFactExtraction: LocalFactExtractionBatchService | undefined, threads: ThreadGraphService | undefined, brief: AnalysisBriefService | undefined, conclusions: ResearchConclusionService | undefined, falsification: IndependentFalsificationService | undefined, dossier: ResearchDossierService | undefined, workbench: EvidenceWorkbenchService | undefined, mechanisms: MechanismAssetService | undefined, planning: StoryPlanningService | undefined, chapterApplications: ChapterMechanismApplicationService | undefined, chapterOutcomes: ChapterMechanismOutcomeService | undefined, mechanismEffectExperiments: MechanismEffectExperimentService | undefined, mechanismEffectWriter: MechanismEffectExperimentWriterService | undefined, mechanismEffectBlindReview: MechanismEffectExperimentBlindReviewService | undefined, chapterMethodWorkbench: ChapterMethodWorkbenchService | undefined, recipes: CreativeRecipeService | undefined, manifests: ChapterContextManifestService | undefined, readerManifests: ChapterReaderManifestService | undefined, reviews: ChapterReviewService | undefined, editor: ChapterEditorService | undefined, editorTasks: ChapterEditorTaskService | undefined, readers: ChapterReaderService | undefined, reviewer: ChapterReviewerService | undefined, production: ChapterProductionCommitService | undefined, writer: ChapterWriterService | undefined, pipelines: PipelineRevisionService | undefined, transport: "stdio" | "desktop_ui", name: string, args: Record<string, unknown>): Promise<unknown> {
   if (name === "get_workspace_status") return application.queries.getWorkspaceStatus();
   if (name === "get_capabilities") return application.queries.getCapabilities();
   if (name === "list_changes") {
@@ -539,14 +589,14 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "approve_confirmation") {
     return application.commands.approveConfirmation({
       confirmationId: requiredString(args, "confirmationId"),
-      actor: { kind: "human_via_agent", id: "mcp" },
+      actor: actorForTransport(transport, "human_via_agent"),
       reason: requiredString(args, "reason"),
     });
   }
   if (name === "reject_confirmation") {
     return application.commands.rejectConfirmation({
       confirmationId: requiredString(args, "confirmationId"),
-      actor: { kind: "human_via_agent", id: "mcp" },
+      actor: actorForTransport(transport, "human_via_agent"),
       reason: requiredString(args, "reason"),
     });
   }
@@ -570,14 +620,14 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     if (!pipelines) throw new Error("PipelineRevision 服务未配置。");
     const expectedRevision = args.expectedRevision;
     return pipelines.save({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       pipelineId: requiredString(args, "pipelineId"), name: requiredString(args, "name"), status: typeof args.status === "string" ? args.status : undefined,
       steps: args.steps as never, expectedRevision: expectedRevision === undefined ? null : expectedRevision as number,
     });
   }
   if (name === "start_pipeline_run") {
     if (!pipelines) throw new Error("PipelineRevision 服务未配置。");
-    return application.pipelineRuns.start({ command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() }, runId: requiredString(args, "runId"), pipelineId: requiredString(args, "pipelineId"), projectId: typeof args.projectId === "string" ? args.projectId : null });
+    return application.pipelineRuns.start({ command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() }, runId: requiredString(args, "runId"), pipelineId: requiredString(args, "pipelineId"), projectId: typeof args.projectId === "string" ? args.projectId : null });
   }
   if (name === "list_pipeline_runs") {
     if (!pipelines) throw new Error("PipelineRevision 服务未配置。");
@@ -589,7 +639,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   }
   if (name === "complete_pipeline_run_step") {
     if (!pipelines) throw new Error("PipelineRevision 服务未配置。");
-    return application.pipelineRuns.completeStep({ command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "mcp" }, createdAt: Date.now() }, runId: requiredString(args, "runId"), stepId: requiredString(args, "stepId"), note: requiredString(args, "note") });
+    return application.pipelineRuns.completeStep({ command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "human_via_agent"), createdAt: Date.now() }, runId: requiredString(args, "runId"), stepId: requiredString(args, "stepId"), note: requiredString(args, "note") });
   }
   if (name === "execute_pipeline_run_step") {
     if (!pipelines) throw new Error("当前 MCP companion 未配置 PipelineRevision 服务。 ");
@@ -597,6 +647,9 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const run = await application.pipelineRuns.get(runId);
     const step = run?.nodes.find((item) => item.stepId === stepId);
     if (!run || !step || step.status !== "pending" || !step.enabled) throw new Error("PipelineRun 步骤不存在、未启用或已完成。 ");
+    if (step.execution !== "executable") throw new Error("该 PipelineRun 节点不是 executable；请由对应 Agent 或人工完成并复核。 ");
+    const incomplete = step.dependsOn.filter((dependency) => run.nodes.find((node) => node.stepId === dependency)?.status !== "completed");
+    if (incomplete.length > 0) throw new Error(`PipelineRun 节点仍依赖未完成步骤：${incomplete.join(", ")}。`);
     const taskId = `pipeline:${runId}:${stepId}`;
     const command = { schemaVersion: 1 as const, commandId: `pipeline-execute:${runId}:${stepId}`, idempotencyKey: `pipeline-execute:${runId}:${stepId}`, correlationId: `pipeline-run:${runId}`, actor: { kind: "internal_agent" as const, id: "mcp-pipeline" }, createdAt: Date.now() };
     if (step.tool === "start_local_fact_extraction_batch") {
@@ -604,40 +657,60 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       const config = pipelineConfig(step.config, ["analysisProjectId"], ["maxTokens"]);
       const analysisProjectId = requiredString(config, "analysisProjectId");
       const maxTokens = config.maxTokens === undefined ? undefined : requiredIntegerInRange(config, "maxTokens", 256, 16_384);
-      const started = await batchFactExtraction.start({ command, taskId, analysisProjectId, baseURL: "http://configured-route.invalid/v1", model: "configured-route", ...(maxTokens === undefined ? {} : { maxTokens }) });
-      if (started.kind === "accepted") void batchFactExtraction.run(taskId).catch(() => undefined);
+      const route = frozenPipelineRoute(run, "fact_extractor");
+      const started = await batchFactExtraction.start({ command, taskId, analysisProjectId, baseURL: route.baseURL, model: route.model, frozenRoute: route, ...(maxTokens === undefined ? {} : { maxTokens }) });
+      if (started.kind === "accepted") {
+        try { await bindPipelineTask(application, runId, stepId, taskId); } catch (cause) { await batchFactExtraction.cancel(taskId).catch(() => undefined); throw cause; }
+        void maybeAutoRun(application, taskId, (id) => batchFactExtraction.run(id));
+      }
       return { runId, stepId, taskId, command: started };
     }
     if (step.tool === "start_chapter_writer_v1") {
       if (!writer) throw new Error("当前 MCP companion 未配置 ChapterWriter 宿主。 ");
       const config = pipelineConfig(step.config, ["projectId", "chapterId", "manifestId", "documentId", "title"], ["maxTokens"]);
       const maxTokens = config.maxTokens === undefined ? undefined : requiredIntegerInRange(config, "maxTokens", 256, 16_384);
-      const started = await writer.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), manifestId: requiredString(config, "manifestId"), documentId: requiredString(config, "documentId"), title: requiredString(config, "title"), baseURL: "http://configured-route.invalid/v1", model: "configured-route", ...(maxTokens === undefined ? {} : { maxTokens }) });
-      if (started.kind === "accepted") void writer.run(taskId).catch(() => undefined);
+      const route = frozenPipelineRoute(run, "writer");
+      const started = await writer.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), manifestId: requiredString(config, "manifestId"), documentId: requiredString(config, "documentId"), title: requiredString(config, "title"), baseURL: route.baseURL, model: route.model, frozenRoute: route, ...(maxTokens === undefined ? {} : { maxTokens }) });
+      if (started.kind === "accepted") {
+        try { await bindPipelineTask(application, runId, stepId, taskId); } catch (cause) { await writer.cancel(taskId).catch(() => undefined); throw cause; }
+        void maybeAutoRun(application, taskId, (id) => writer.run(id));
+      }
       return { runId, stepId, taskId, command: started };
     }
     if (step.tool === "start_chapter_reader") {
       if (!readers) throw new Error("当前 MCP companion 未配置 ChapterReader 宿主。 ");
       const config = pipelineConfig(step.config, ["projectId", "chapterId", "manifestId", "documentId", "reportId", "title"], ["maxTokens"]);
       const maxTokens = config.maxTokens === undefined ? undefined : requiredIntegerInRange(config, "maxTokens", 256, 16_384);
-      const started = await readers.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), manifestId: requiredString(config, "manifestId"), documentId: requiredString(config, "documentId"), reportId: requiredString(config, "reportId"), title: requiredString(config, "title"), baseURL: "http://configured-route.invalid/v1", model: "configured-route", ...(maxTokens === undefined ? {} : { maxTokens }) });
-      if (started.kind === "accepted") void readers.run(taskId).catch(() => undefined);
+      const route = frozenPipelineRoute(run, "reader");
+      const started = await readers.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), manifestId: requiredString(config, "manifestId"), documentId: requiredString(config, "documentId"), reportId: requiredString(config, "reportId"), title: requiredString(config, "title"), baseURL: route.baseURL, model: route.model, frozenRoute: route, ...(maxTokens === undefined ? {} : { maxTokens }) });
+      if (started.kind === "accepted") {
+        try { await bindPipelineTask(application, runId, stepId, taskId); } catch (cause) { await readers.cancel(taskId).catch(() => undefined); throw cause; }
+        void maybeAutoRun(application, taskId, (id) => readers.run(id));
+      }
       return { runId, stepId, taskId, command: started };
     }
     if (step.tool === "start_chapter_reviewer") {
       if (!reviewer) throw new Error("当前 MCP companion 未配置 ChapterReviewer 宿主。 ");
       const config = pipelineConfig(step.config, ["projectId", "chapterId", "draftDocumentId", "reviewId", "readerManifestIds", "readerFeedbackDocumentIds", "title"], ["maxTokens"]);
       const maxTokens = config.maxTokens === undefined ? undefined : requiredIntegerInRange(config, "maxTokens", 256, 16_384);
-      const started = await reviewer.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), draftDocumentId: requiredString(config, "draftDocumentId"), reviewId: requiredString(config, "reviewId"), readerManifestIds: requiredStringArray(config, "readerManifestIds"), readerFeedbackDocumentIds: requiredStringArray(config, "readerFeedbackDocumentIds"), title: requiredString(config, "title"), baseURL: "http://configured-route.invalid/v1", model: "configured-route", ...(maxTokens === undefined ? {} : { maxTokens }) });
-      if (started.kind === "accepted") void reviewer.run(taskId).catch(() => undefined);
+      const route = frozenPipelineRoute(run, "reviewer");
+      const started = await reviewer.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), draftDocumentId: requiredString(config, "draftDocumentId"), reviewId: requiredString(config, "reviewId"), readerManifestIds: requiredStringArray(config, "readerManifestIds"), readerFeedbackDocumentIds: requiredStringArray(config, "readerFeedbackDocumentIds"), title: requiredString(config, "title"), baseURL: route.baseURL, model: route.model, frozenRoute: route, ...(maxTokens === undefined ? {} : { maxTokens }) });
+      if (started.kind === "accepted") {
+        try { await bindPipelineTask(application, runId, stepId, taskId); } catch (cause) { await reviewer.cancel(taskId).catch(() => undefined); throw cause; }
+        void maybeAutoRun(application, taskId, (id) => reviewer.run(id));
+      }
       return { runId, stepId, taskId, command: started };
     }
     if (step.tool === "start_chapter_editor") {
       if (!editorTasks) throw new Error("当前 MCP companion 未配置 ChapterEditor 宿主。 ");
       const config = pipelineConfig(step.config, ["projectId", "chapterId", "title", "targetDocumentId", "sourceDraftDocumentId", "reviewId", "selectedIssueIds", "rationale"], ["maxTokens"]);
       const maxTokens = config.maxTokens === undefined ? undefined : requiredIntegerInRange(config, "maxTokens", 256, 16_384);
-      const started = await editorTasks.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), title: requiredString(config, "title"), targetDocumentId: requiredString(config, "targetDocumentId"), sourceDraftDocumentId: requiredString(config, "sourceDraftDocumentId"), reviewId: requiredString(config, "reviewId"), selectedIssueIds: requiredStringArray(config, "selectedIssueIds"), rationale: requiredString(config, "rationale"), baseURL: "http://configured-route.invalid/v1", model: "configured-route", ...(maxTokens === undefined ? {} : { maxTokens }) });
-      if (started.kind === "accepted") void editorTasks.run(taskId).catch(() => undefined);
+      const route = frozenPipelineRoute(run, "editor");
+      const started = await editorTasks.start({ command, taskId, projectId: requiredString(config, "projectId"), chapterId: requiredString(config, "chapterId"), title: requiredString(config, "title"), targetDocumentId: requiredString(config, "targetDocumentId"), sourceDraftDocumentId: requiredString(config, "sourceDraftDocumentId"), reviewId: requiredString(config, "reviewId"), selectedIssueIds: requiredStringArray(config, "selectedIssueIds"), rationale: requiredString(config, "rationale"), baseURL: route.baseURL, model: route.model, frozenRoute: route, ...(maxTokens === undefined ? {} : { maxTokens }) });
+      if (started.kind === "accepted") {
+        try { await bindPipelineTask(application, runId, stepId, taskId); } catch (cause) { await editorTasks.cancel(taskId).catch(() => undefined); throw cause; }
+        void maybeAutoRun(application, taskId, (id) => editorTasks.run(id));
+      }
       return { runId, stepId, taskId, command: started };
     }
     throw new Error(`Pipeline 步骤 ${step.tool} 尚无受控宿主执行器；请调用对应领域工具后记录人工复核。 `);
@@ -646,7 +719,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const expectedRevision = args.expectedRevision;
     if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是正整数。 ");
     return application.commands.execute({
-      schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" },
+      schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"),
       ...(expectedRevision === undefined ? {} : { expectedRevision: expectedRevision as number }), tool: "save_workspace_settings",
       args: { automationMode: requiredString(args, "automationMode"), contextWindowTokens: requiredPositiveInteger(args, "contextWindowTokens"), maxOutputTokens: requiredPositiveInteger(args, "maxOutputTokens"), safetyMarginRatio: requiredRatio(args, "safetyMarginRatio"), cloudEscalation: requiredString(args, "cloudEscalation") }, createdAt: Date.now(),
     });
@@ -655,9 +728,9 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const expectedRevision = args.expectedRevision;
     if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是正整数。 ");
     return application.commands.execute({
-      schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" },
+      schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"),
       ...(expectedRevision === undefined ? {} : { expectedRevision: expectedRevision as number }), tool: "save_provider_profile",
-      args: { providerProfileId: requiredString(args, "providerProfileId"), name: requiredString(args, "name"), baseURL: requiredString(args, "baseURL"), defaultModel: requiredString(args, "defaultModel"), routes: requiredRecords(args, "routes") }, createdAt: Date.now(),
+      args: { providerProfileId: requiredString(args, "providerProfileId"), name: requiredString(args, "name"), baseURL: requiredString(args, "baseURL"), protocol: requiredString(args, "protocol"), defaultModel: requiredString(args, "defaultModel"), contextWindowTokens: requiredPositiveInteger(args, "contextWindowTokens"), maxOutputTokens: requiredPositiveInteger(args, "maxOutputTokens"), safetyMarginRatio: requiredRatio(args, "safetyMarginRatio"), routes: requiredRecords(args, "routes") }, createdAt: Date.now(),
     });
   }
   if (name === "create_novel_project") {
@@ -668,7 +741,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       commandId: requiredString(args, "commandId"),
       idempotencyKey: requiredString(args, "idempotencyKey"),
       correlationId: requiredString(args, "correlationId"),
-      actor: { kind: "external_agent", id: "mcp" },
+      actor: actorForTransport(transport, "external_agent"),
       tool: "create_novel_project",
       args: { projectId: requiredString(args, "projectId"), title: requiredString(args, "title"), status: requiredString(args, "status"), payload },
       createdAt: Date.now(),
@@ -701,7 +774,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
         commandId: requiredString(args, "commandId"),
         idempotencyKey: requiredString(args, "idempotencyKey"),
         correlationId: requiredString(args, "correlationId"),
-        actor: { kind: "external_agent", id: "mcp" },
+        actor: actorForTransport(transport, "external_agent"),
         createdAt: Date.now(),
       },
       taskId: requiredString(args, "taskId"),
@@ -713,7 +786,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void creation.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => creation.run(id));
     return result;
   }
   if (name === "get_local_creation_draft") {
@@ -729,16 +802,16 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "create_workspace_backup") {
     if (!maintenance) throw new Error("当前 MCP companion 未配置工作区备份恢复服务。 ");
     const result = await maintenance.startBackup({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"), backupId: requiredString(args, "backupId"),
     });
-    if (result.kind === "accepted") void maintenance.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => maintenance.run(id));
     return result;
   }
   if (name === "restore_workspace_backup") {
     if (!maintenance) throw new Error("当前 MCP companion 未配置工作区备份恢复服务。 ");
     return maintenance.startRestore({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"), backupId: requiredString(args, "backupId"), restoreId: requiredString(args, "restoreId"),
     });
   }
@@ -751,19 +824,19 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "export_project") {
     if (!exporter) throw new Error("当前 MCP companion 未配置工作区导出服务。 ");
     const result = await exporter.startProjectExport({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"), projectId: requiredString(args, "projectId"), exportId: requiredString(args, "exportId"),
     });
-    if (result.kind === "accepted") void exporter.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => exporter.run(id));
     return result;
   }
   if (name === "export_analysis") {
     if (!exporter) throw new Error("当前 MCP companion 未配置工作区导出服务。 ");
     const result = await exporter.startAnalysisExport({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"), referenceWorkId: requiredString(args, "referenceWorkId"), exportId: requiredString(args, "exportId"),
     });
-    if (result.kind === "accepted") void exporter.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => exporter.run(id));
     return result;
   }
   if (name === "resume_workspace_export") {
@@ -775,7 +848,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "start_local_fact_extraction") {
     if (!factExtraction) throw new Error("当前 MCP companion 未配置本地 FactExtractor 服务。");
     const result = await factExtraction.start({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"),
       analysisProjectId: requiredString(args, "analysisProjectId"),
       analysisUnitId: requiredString(args, "analysisUnitId"),
@@ -783,7 +856,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void factExtraction.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => factExtraction.run(id));
     return result;
   }
   if (name === "resume_local_fact_extraction") {
@@ -795,26 +868,26 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "reconfigure_local_fact_extraction") {
     if (!factExtraction) throw new Error("当前 MCP companion 未配置本地 FactExtractor 服务。");
     const result = await factExtraction.reconfigure({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"),
       baseURL: configuredBaseURL(args),
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void factExtraction.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => factExtraction.run(id));
     return result;
   }
   if (name === "start_local_fact_extraction_batch") {
     if (!batchFactExtraction) throw new Error("当前 MCP companion 未配置本地 FactExtractor 批服务。 ");
     const result = await batchFactExtraction.start({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       taskId: requiredString(args, "taskId"),
       analysisProjectId: requiredString(args, "analysisProjectId"),
       baseURL: configuredBaseURL(args),
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void batchFactExtraction.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => batchFactExtraction.run(id));
     return result;
   }
   if (name === "resume_local_fact_extraction_batch") {
@@ -839,7 +912,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
         commandId: requiredString(args, "commandId"),
         idempotencyKey: requiredString(args, "idempotencyKey"),
         correlationId: requiredString(args, "correlationId"),
-        actor: { kind: "external_agent", id: "mcp" },
+        actor: actorForTransport(transport, "external_agent"),
         createdAt: Date.now(),
       },
       referenceWorkId: requiredString(args, "referenceWorkId"),
@@ -856,7 +929,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
         commandId: requiredString(args, "commandId"),
         idempotencyKey: requiredString(args, "idempotencyKey"),
         correlationId: requiredString(args, "correlationId"),
-        actor: { kind: "external_agent", id: "mcp" },
+        actor: actorForTransport(transport, "external_agent"),
         createdAt: Date.now(),
       },
       taskId: requiredString(args, "taskId"),
@@ -895,7 +968,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const boundary = args.boundary;
     if (boundary !== "complete" && boundary !== "volume" && boundary !== "fragment") throw new Error("boundary 非法");
     return corpus.prepare({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       segmentationId: requiredString(args, "segmentationId"),
       sourceEditionId: requiredString(args, "sourceEditionId"),
@@ -922,7 +995,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "create_structural_reading_map") {
     if (!maps) throw new Error("当前 MCP companion 未配置 ReadingMap 服务。");
     return maps.create({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
     });
   }
@@ -933,7 +1006,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "submit_analysis_facts") {
     if (!facts) throw new Error("当前 MCP companion 未配置 FactLedger 服务。");
     return facts.submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       analysisUnitId: requiredString(args, "analysisUnitId"),
       rawOutput: requiredString(args, "rawOutput"),
@@ -946,7 +1019,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "submit_thread_graph") {
     if (!threads) throw new Error("当前 MCP companion 未配置 ThreadGraph 服务。");
     return threads.submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       rawOutput: requiredString(args, "rawOutput"),
     });
@@ -958,7 +1031,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "submit_analysis_brief") {
     if (!brief) throw new Error("当前 MCP companion 未配置 AnalysisBrief 服务。");
     return brief.submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       rawOutput: requiredString(args, "rawOutput"),
     });
@@ -970,14 +1043,14 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "approve_analysis_brief") {
     if (!brief) throw new Error("当前 MCP companion 未配置 AnalysisBrief 服务。");
     return brief.approve({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "human_via_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
     });
   }
   if (name === "submit_research_conclusions") {
     if (!conclusions) throw new Error("当前 MCP companion 未配置 ResearchConclusion 服务。");
     return conclusions.submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       researchQuestionId: requiredString(args, "researchQuestionId"),
       rawOutput: requiredString(args, "rawOutput"),
@@ -994,7 +1067,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "submit_independent_falsification") {
     if (!falsification) throw new Error("当前 MCP companion 未配置 IndependentFalsification 服务。");
     return falsification.submit({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       conclusionId: requiredString(args, "conclusionId"),
       rawOutput: requiredString(args, "rawOutput"),
@@ -1007,7 +1080,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "create_research_dossier") {
     if (!dossier) throw new Error("当前 MCP companion 未配置 ResearchDossier 服务。");
     return dossier.create({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
     });
   }
@@ -1035,7 +1108,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "propose_mechanism_candidate") {
     if (!mechanisms) throw new Error("当前 MCP companion 未配置 MechanismAsset 服务。");
     return mechanisms.propose({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "external_agent", id: "mcp" }, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "external_agent"), createdAt: Date.now() },
       analysisProjectId: requiredString(args, "analysisProjectId"),
       rawOutput: requiredString(args, "rawOutput"),
     });
@@ -1054,7 +1127,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const status = requiredString(args, "status");
     if (status !== "adopted" && status !== "editor_only" && status !== "rejected") throw new Error("status 必须为 adopted、editor_only 或 rejected。");
     return mechanisms.review({
-      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: "human_via_agent", id: "mcp" }, projectId: requiredString(args, "projectId"), expectedRevision, createdAt: Date.now() },
+      command: { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: actorForTransport(transport, "human_via_agent"), projectId: requiredString(args, "projectId"), expectedRevision, createdAt: Date.now() },
       mechanismAssetId: requiredString(args, "mechanismAssetId"), status,
     });
   }
@@ -1068,22 +1141,22 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   }
   if (name === "save_project_intent") {
     if (!planning) throw new Error("当前 MCP companion 未配置 StoryPlanning 服务。");
-    return planning.saveProjectIntent({ command: planningCommand(args, "external_agent"), projectId: requiredString(args, "projectId"), intent: requiredRecord(args, "intent") });
+    return planning.saveProjectIntent({ command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId"), intent: requiredRecord(args, "intent") });
   }
   if (name === "submit_story_concepts") {
     if (!planning) throw new Error("当前 MCP companion 未配置 StoryPlanning 服务。");
-    return planning.submitStoryConcepts({ command: planningCommand(args, "external_agent"), projectId: requiredString(args, "projectId"), rawOutput: requiredString(args, "rawOutput") });
+    return planning.submitStoryConcepts({ command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId"), rawOutput: requiredString(args, "rawOutput") });
   }
   if (name === "select_story_concept") {
     if (!planning) throw new Error("当前 MCP companion 未配置 StoryPlanning 服务。");
-    return planning.selectStoryConcept({ command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), conceptId: requiredString(args, "conceptId") });
+    return planning.selectStoryConcept({ command: planningCommand(args, "human_via_agent", transport), projectId: requiredString(args, "projectId"), conceptId: requiredString(args, "conceptId") });
   }
   if (name === "review_project_planning_document") {
     if (!planning) throw new Error("当前 MCP companion 未配置 StoryPlanning 服务。");
     const status = requiredString(args, "status");
     if (status !== "approved" && status !== "rejected") throw new Error("status 必须为 approved 或 rejected。");
     return planning.reviewDocument({
-      command: planningCommand(args, "human_via_agent"),
+      command: planningCommand(args, "human_via_agent", transport),
       projectId: requiredString(args, "projectId"),
       documentId: requiredString(args, "documentId"),
       expectedRevision: requiredPositiveInteger(args, "expectedRevision"),
@@ -1093,16 +1166,78 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   const planningKind = name === "save_story_contract" ? ["saveStoryContract", "contract"] as const : name === "save_story_system" ? ["saveStorySystem", "system"] as const : name === "save_book_outline" ? ["saveBookOutline", "outline"] as const : name === "save_stage_plan" ? ["saveStagePlan", "stage"] as const : name === "save_chapter_contract" ? ["saveChapterContract", "contract"] as const : null;
   if (planningKind) {
     if (!planning) throw new Error("当前 MCP companion 未配置 StoryPlanning 服务。");
-    const [method, field] = planningKind; const input = { command: planningCommand(args, "external_agent"), projectId: requiredString(args, "projectId") };
+    const [method, field] = planningKind; const input = { command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId") };
     if (method === "saveStoryContract") return planning.saveStoryContract({ ...input, contract: requiredRecord(args, field) });
     if (method === "saveStorySystem") return planning.saveStorySystem({ ...input, system: requiredRecord(args, field) });
     if (method === "saveBookOutline") return planning.saveBookOutline({ ...input, outline: requiredRecord(args, field) });
     if (method === "saveStagePlan") return planning.saveStagePlan({ ...input, stage: requiredRecord(args, field) });
     return planning.saveChapterContract({ ...input, contract: requiredRecord(args, field) });
   }
+  if (name === "save_chapter_mechanism_application") {
+    if (!chapterApplications) throw new Error("当前 MCP companion 未配置本章采用记录服务。 ");
+    const expectedRevision = args.expectedRevision;
+    if (expectedRevision !== null && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是 null 或正整数。 ");
+    return chapterApplications.save({ command: planningCommand(args, "human_via_agent", transport), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), expectedRevision: expectedRevision as number | null, application: requiredRecord(args, "application") as never });
+  }
+  if (name === "get_chapter_mechanism_application") {
+    if (!chapterApplications) throw new Error("当前 MCP companion 未配置本章采用记录服务。 ");
+    return chapterApplications.get({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  }
+  if (name === "save_chapter_mechanism_outcome") {
+    if (!chapterOutcomes) throw new Error("当前 MCP companion 未配置本章应用结果服务。 ");
+    const expectedRevision = args.expectedRevision;
+    if (expectedRevision !== null && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是 null 或正整数。 ");
+    return chapterOutcomes.save({ command: planningCommand(args, "human_via_agent", transport), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), expectedRevision: expectedRevision as number | null, outcome: requiredRecord(args, "outcome") as never });
+  }
+  if (name === "get_chapter_mechanism_outcome") {
+    if (!chapterOutcomes) throw new Error("当前 MCP companion 未配置本章应用结果服务。 ");
+    return chapterOutcomes.get({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  }
+  if (name === "get_chapter_method_workbench") {
+    if (!chapterMethodWorkbench) throw new Error("当前 MCP companion 未配置章节方法工作台服务。 ");
+    return chapterMethodWorkbench.get({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  }
+  if (name === "save_mechanism_effect_experiment") {
+    if (!mechanismEffectExperiments) throw new Error("当前 MCP companion 未配置机制效用实验服务。 ");
+    const expectedRevision = args.expectedRevision;
+    if (expectedRevision !== null && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是 null 或正整数。 ");
+    return mechanismEffectExperiments.save({ command: planningCommand(args, "human_via_agent", transport), projectId: requiredString(args, "projectId"), expectedRevision: expectedRevision as number | null, experiment: requiredRecord(args, "experiment") as never });
+  }
+  if (name === "get_mechanism_effect_experiment") {
+    if (!mechanismEffectExperiments) throw new Error("当前 MCP companion 未配置机制效用实验服务。 ");
+    return mechanismEffectExperiments.get({ projectId: requiredString(args, "projectId"), experimentId: requiredString(args, "experimentId") });
+  }
+  if (name === "start_mechanism_effect_experiment_candidate") {
+    if (!mechanismEffectWriter) throw new Error("当前 MCP companion 未配置机制效用实验 Writer。 ");
+    const result = await mechanismEffectWriter.start({ command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId"), experimentId: requiredString(args, "experimentId"), pairId: requiredString(args, "pairId"), candidateId: requiredString(args, "candidateId"), sourceManifestId: requiredString(args, "sourceManifestId"), taskId: requiredString(args, "taskId"), title: requiredString(args, "title") });
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (taskId) => mechanismEffectWriter.run(taskId));
+    return result;
+  }
+  if (name === "resume_mechanism_effect_experiment_candidate") {
+    if (!mechanismEffectWriter) throw new Error("当前 MCP companion 未配置机制效用实验 Writer。 ");
+    const taskId = requiredString(args, "taskId");
+    await mechanismEffectWriter.run(taskId);
+    return mechanismEffectWriter.getTask(taskId);
+  }
+  if (name === "start_mechanism_effect_experiment_blind_review") {
+    if (!mechanismEffectBlindReview) throw new Error("当前 MCP companion 未配置机制效用实验盲评。 ");
+    const result = await mechanismEffectBlindReview.start({ command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId"), experimentId: requiredString(args, "experimentId"), pairId: requiredString(args, "pairId"), sourceManifestId: requiredString(args, "sourceManifestId"), taskId: requiredString(args, "taskId"), documentId: requiredString(args, "documentId"), title: requiredString(args, "title") });
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (taskId) => mechanismEffectBlindReview.run(taskId));
+    return result;
+  }
+  if (name === "resume_mechanism_effect_experiment_blind_review") {
+    if (!mechanismEffectBlindReview) throw new Error("当前 MCP companion 未配置机制效用实验盲评。 ");
+    const taskId = requiredString(args, "taskId");
+    await mechanismEffectBlindReview.run(taskId);
+    return mechanismEffectBlindReview.getTask(taskId);
+  }
+  if (name === "get_mechanism_effect_experiment_blind_review") {
+    if (!mechanismEffectBlindReview) throw new Error("当前 MCP companion 未配置机制效用实验盲评。 ");
+    return mechanismEffectBlindReview.getReport({ documentId: requiredString(args, "documentId") });
+  }
   if (name === "create_creative_recipe") {
     if (!recipes) throw new Error("当前 MCP companion 未配置 CreativeRecipe 服务。");
-    return recipes.create({ command: planningCommand(args, "external_agent"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+    return recipes.create({ command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
   }
   if (name === "get_creative_recipe") {
     if (!recipes) throw new Error("当前 MCP companion 未配置 CreativeRecipe 服务。");
@@ -1111,7 +1246,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "freeze_chapter_context_manifest") {
     if (!manifests) throw new Error("当前 MCP companion 未配置 ChapterContextManifest 服务。");
     return manifests.freeze({
-      command: planningCommand(args, "external_agent"),
+      command: planningCommand(args, "external_agent", transport),
       projectId: requiredString(args, "projectId"),
       chapterId: requiredString(args, "chapterId"),
       manifestId: requiredString(args, "manifestId"),
@@ -1128,7 +1263,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const readerKind = requiredString(args, "readerKind");
     if (readerKind !== "immersive" && readerKind !== "low_patience" && readerKind !== "logic_sensitive") throw new Error("readerKind 非法。 ");
     return readerManifests.freeze({
-      command: planningCommand(args, "external_agent"),
+      command: planningCommand(args, "external_agent", transport),
       projectId: requiredString(args, "projectId"),
       chapterId: requiredString(args, "chapterId"),
       draftDocumentId: requiredString(args, "draftDocumentId"),
@@ -1144,7 +1279,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "start_chapter_reader") {
     if (!readers) throw new Error("当前 MCP companion 未配置 ChapterReader 服务。");
     const result = await readers.start({
-      command: planningCommand(args, "external_agent"),
+      command: planningCommand(args, "external_agent", transport),
       taskId: requiredString(args, "taskId"),
       documentId: requiredString(args, "documentId"),
       reportId: requiredString(args, "reportId"),
@@ -1156,7 +1291,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void readers.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => readers.run(id));
     return result;
   }
   if (name === "resume_chapter_reader") {
@@ -1174,7 +1309,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const readerManifestIds = requiredStringArray(args, "readerManifestIds");
     const readerFeedbackDocumentIds = requiredStringArray(args, "readerFeedbackDocumentIds");
     const result = await reviewer.start({
-      command: planningCommand(args, "external_agent"),
+      command: planningCommand(args, "external_agent", transport),
       taskId: requiredString(args, "taskId"),
       projectId: requiredString(args, "projectId"),
       chapterId: requiredString(args, "chapterId"),
@@ -1187,7 +1322,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void reviewer.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => reviewer.run(id));
     return result;
   }
   if (name === "resume_chapter_reviewer") {
@@ -1205,7 +1340,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     const readerManifestIds = requiredStringArray(args, "readerManifestIds");
     const readerFeedbackDocumentIds = requiredStringArray(args, "readerFeedbackDocumentIds");
     return reviews.submit({
-      command: planningCommand(args, "external_agent"),
+      command: planningCommand(args, "external_agent", transport),
       projectId: requiredString(args, "projectId"),
       chapterId: requiredString(args, "chapterId"),
       draftDocumentId: requiredString(args, "draftDocumentId"),
@@ -1223,8 +1358,10 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     if (!editor) throw new Error("当前 MCP companion 未配置 ChapterEditor 服务。");
     const selectedIssueIds = args.selectedIssueIds;
     if (!Array.isArray(selectedIssueIds) || selectedIssueIds.some((item) => typeof item !== "string" || !item.trim())) throw new Error("selectedIssueIds 必须是字符串数组。 ");
+    const command = planningCommand(args, "external_agent", transport);
     return editor.create({
-      command: planningCommand(args, "external_agent"),
+      command,
+      executionRef: command.commandId,
       projectId: requiredString(args, "projectId"),
       chapterId: requiredString(args, "chapterId"),
       documentId: requiredString(args, "documentId"),
@@ -1244,7 +1381,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
     if (!editorTasks) throw new Error("当前 MCP companion 未配置 ChapterEditorTask 服务。");
     const selectedIssueIds = requiredStringArray(args, "selectedIssueIds");
     const result = await editorTasks.start({
-      command: planningCommand(args, "external_agent"),
+      command: planningCommand(args, "external_agent", transport),
       taskId: requiredString(args, "taskId"),
       projectId: requiredString(args, "projectId"),
       chapterId: requiredString(args, "chapterId"),
@@ -1258,7 +1395,7 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
       model: configuredModel(args),
       ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}),
     });
-    if (result.kind === "accepted") void editorTasks.run(result.taskId).catch(() => undefined);
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => editorTasks.run(id));
     return result;
   }
   if (name === "resume_chapter_editor") {
@@ -1270,8 +1407,22 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   if (name === "commit_chapter") {
     if (!production) throw new Error("当前 MCP companion 未配置 ChapterProductionCommit 服务。");
     return production.acceptDraft({
-      command: planningCommand(args, "human_via_agent"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), chapterOrdinal: requiredPositiveInteger(args, "chapterOrdinal"), productionCommitId: requiredString(args, "productionCommitId"), draftDocumentId: requiredString(args, "draftDocumentId"), chapterDelta: requiredRecord(args, "chapterDelta"), canonPatches: requiredRecords(args, "canonPatches") as unknown as CanonPatch[], characterKnowledgePatches: requiredRecords(args, "characterKnowledgePatches") as unknown as CharacterKnowledgePatch[], readerState: requiredRecord(args, "readerState") as { readerStateId: string; payload: Record<string, unknown> }, readerPromiseUpdates: requiredRecords(args, "readerPromiseUpdates") as unknown as ReaderPromisePatch[], outlineDrift: requiredRecord(args, "outlineDrift") as { payload: Record<string, unknown> },
+      command: planningCommand(args, "human_via_agent", transport), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), chapterOrdinal: requiredPositiveInteger(args, "chapterOrdinal"), productionCommitId: requiredString(args, "productionCommitId"), draftDocumentId: requiredString(args, "draftDocumentId"), ...(typeof args.outcomeId === "string" ? { outcomeId: requiredString(args, "outcomeId") } : {}), chapterDelta: requiredRecord(args, "chapterDelta") as Record<string, unknown>, canonPatches: requiredRecords(args, "canonPatches") as unknown as CanonPatch[], characterKnowledgePatches: requiredRecords(args, "characterKnowledgePatches") as unknown as CharacterKnowledgePatch[], readerState: requiredRecord(args, "readerState") as { readerStateId: string; payload: Record<string, unknown> }, readerPromiseUpdates: requiredRecords(args, "readerPromiseUpdates") as unknown as ReaderPromisePatch[], outlineDrift: requiredRecord(args, "outlineDrift") as { payload: Record<string, unknown> },
     });
+  }
+  if (name === "save_chapter_production_commit_proposal") {
+    if (!production) throw new Error("当前 MCP companion 未配置 ChapterProductionCommit 服务。 ");
+    const expectedRevision = args.expectedRevision;
+    if (expectedRevision !== null && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1)) throw new Error("expectedRevision 必须是 null 或正整数。 ");
+    return production.saveProposal({ command: planningCommand(args, "external_agent", transport), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), expectedRevision: expectedRevision as number | null, proposal: requiredRecord(args, "proposal") as never });
+  }
+  if (name === "get_chapter_production_commit_proposal") {
+    if (!production) throw new Error("当前 MCP companion 未配置 ChapterProductionCommit 服务。 ");
+    return production.getProposal({ projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId") });
+  }
+  if (name === "request_chapter_production_commit") {
+    if (!production) throw new Error("当前 MCP companion 未配置 ChapterProductionCommit 服务。 ");
+    return production.acceptProposal({ command: planningCommand(args, "human_via_agent", transport), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), proposalId: requiredString(args, "proposalId") });
   }
   if (name === "get_accepted_chapter") {
     if (!production) throw new Error("当前 MCP companion 未配置 ChapterProductionCommit 服务。");
@@ -1279,8 +1430,8 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   }
   if (name === "start_chapter_writer_v1") {
     if (!writer) throw new Error("当前 MCP companion 未配置 ChapterWriter 服务。");
-    const result = await writer.start({ command: planningCommand(args, "external_agent"), taskId: requiredString(args, "taskId"), documentId: requiredString(args, "documentId"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), manifestId: requiredString(args, "manifestId"), title: requiredString(args, "title"), baseURL: configuredBaseURL(args), model: configuredModel(args), ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}) });
-    if (result.kind === "accepted") void writer.run(result.taskId).catch(() => undefined);
+    const result = await writer.start({ command: planningCommand(args, "external_agent", transport), taskId: requiredString(args, "taskId"), documentId: requiredString(args, "documentId"), projectId: requiredString(args, "projectId"), chapterId: requiredString(args, "chapterId"), manifestId: requiredString(args, "manifestId"), title: requiredString(args, "title"), baseURL: configuredBaseURL(args), model: configuredModel(args), ...(typeof args.maxTokens === "number" ? { maxTokens: args.maxTokens } : {}) });
+    if (result.kind === "accepted") void maybeAutoRun(application, result.taskId, (id) => writer.run(id));
     return result;
   }
   if (name === "resume_chapter_writer_v1") {
@@ -1296,7 +1447,12 @@ async function callTool(application: WorkspaceApplicationService, tasks: TaskRun
   throw new Error(`未知 Ainovr tool：${name || "（空）"}`);
 }
 
-function planningCommand(args: Record<string, unknown>, kind: "external_agent" | "human_via_agent"): Omit<CommandEnvelope, "tool" | "args"> { return { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind, id: "mcp" }, createdAt: Date.now() }; }
+function planningCommand(args: Record<string, unknown>, kind: "external_agent" | "human_via_agent", transport: "stdio" | "desktop_ui"): Omit<CommandEnvelope, "tool" | "args"> { const actorKind = transport === "desktop_ui" ? "human" : kind; return { schemaVersion: 1, commandId: requiredString(args, "commandId"), idempotencyKey: requiredString(args, "idempotencyKey"), correlationId: requiredString(args, "correlationId"), actor: { kind: actorKind, id: transport === "desktop_ui" ? "desktop-ui" : "mcp" }, createdAt: Date.now() }; }
+function actorForTransport(transport: "stdio" | "desktop_ui", requestedKind: "human_via_agent"): { kind: "human" | "human_via_agent"; id: string };
+function actorForTransport(transport: "stdio" | "desktop_ui", requestedKind: "external_agent"): { kind: "human" | "external_agent"; id: string };
+function actorForTransport(transport: "stdio" | "desktop_ui", requestedKind: "external_agent" | "human_via_agent"): { kind: "human" | "external_agent" | "human_via_agent"; id: string } {
+  return transport === "desktop_ui" ? { kind: "human", id: "desktop-ui" } : { kind: requestedKind, id: "mcp" };
+}
 function requiredRecord(args: Record<string, unknown>, key: string): Record<string, unknown> { const value = record(args[key]); if (!value) throw new Error(`${key} 必须是对象`); return value; }
 function requiredRecords(args: Record<string, unknown>, key: string): Record<string, unknown>[] { const value = args[key]; if (!Array.isArray(value) || value.some((item) => !record(item))) throw new Error(`${key} 必须是对象数组`); return value as Record<string, unknown>[]; }
 function requiredStringArray(args: Record<string, unknown>, key: string): string[] { const value = args[key]; if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) throw new Error(`${key} 必须是非空字符串数组。`); return [...value] as string[]; }
@@ -1340,6 +1496,26 @@ function requiredRatio(args: Record<string, unknown>, key: string): number {
   const value = args[key];
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value >= 1) throw new Error(`${key} 必须在 [0, 1) 内`);
   return value;
+}
+
+function frozenPipelineRoute(run: PipelineRunView, role: ModelRole) {
+  const route = run.routeSnapshots[role];
+  if (!route) throw new Error(`PipelineRun 未冻结 ${role} 的 Provider 路由；拒绝执行。`);
+  return route;
+}
+
+async function bindPipelineTask(application: WorkspaceApplicationService, runId: string, stepId: string, taskId: string): Promise<void> {
+  const result = await application.pipelineRuns.bindTask({
+    command: { schemaVersion: 1, commandId: `pipeline-bind:${runId}:${stepId}`, idempotencyKey: `pipeline-bind:${runId}:${stepId}`, correlationId: `pipeline-run:${runId}`, actor: { kind: "internal_agent", id: "mcp-pipeline" }, createdAt: Date.now() },
+    runId, stepId, taskId,
+  });
+  if (result.kind !== "ok") throw new Error(`Pipeline 步骤 ${stepId} 无法绑定任务：${result.kind}`);
+}
+
+async function maybeAutoRun(application: WorkspaceApplicationService, taskId: string, run: (taskId: string) => Promise<unknown>): Promise<void> {
+  const settings = await application.queries.getWorkspaceSettings();
+  if (!shouldAutoStartTask(settings.automationMode)) return;
+  await run(taskId).catch(() => undefined);
 }
 
 function configuredBaseURL(args: Record<string, unknown>): string {

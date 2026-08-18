@@ -5,7 +5,7 @@ import { createProjectDocumentRepository } from "@/persistence/project-document-
 import type { ObjectReference, ObjectStore } from "@/persistence/object-store";
 import type { PayloadSchemaRegistry } from "@/persistence/schema-registry";
 import type { SqlDriver } from "@/persistence/sql-driver";
-import type { ModelResolver, ModelRole } from "@/application/model-resolver";
+import type { ModelResolver, ModelRole, ModelWireProtocol, ResolvedModelRoute } from "@/application/model-resolver";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -16,6 +16,7 @@ export interface LocalModelCompletionRequest {
   baseURL: string;
   model: string;
   providerProfileId?: string;
+  protocol?: ModelWireProtocol;
   prompt: string;
   maxTokens: number;
   outputMode?: LocalCreationOutputMode;
@@ -35,6 +36,12 @@ export interface StartLocalCreationInput {
   baseURL: string;
   model: string;
   providerProfileId?: string;
+  protocol?: ModelWireProtocol;
+  /** 仅由受控 PipelineRun 传入的已冻结无 Secret 路由。 */
+  frozenRoute?: ResolvedModelRoute;
+  /** 仅由 ModelResolver 冻结，防止任务执行时悄然改变有效上下文边界。 */
+  modelContextWindowTokens?: number;
+  safetyMarginRatio?: number;
   maxTokens?: number;
   /** 仅保存小型、非秘密的产物索引；完整 Prompt 仍只进入对象库。 */
   metadata?: Record<string, unknown>;
@@ -44,6 +51,7 @@ export interface StartLocalCreationInput {
 export interface LocalCreationDraft {
   documentId: string;
   projectId: string;
+  revision: number;
   title: string;
   text: string;
   model: string;
@@ -103,10 +111,23 @@ export function createLocalCreationService(options: CreateLocalCreationServiceOp
 
   return {
     async start(input) {
-      const route = options.modelResolver
+      const route = input.frozenRoute ?? (options.modelResolver
         ? await options.modelResolver.resolve({ role: modelRoleFromMetadata(input.metadata) ?? options.defaultModelRole ?? "writer" })
-        : null;
-      const payload = toInputPayload(route ? { ...input, baseURL: route.baseURL, model: route.model, providerProfileId: route.providerProfileId } : input);
+        : null);
+      const expectedRole = modelRoleFromMetadata(input.metadata) ?? options.defaultModelRole ?? "writer";
+      if (route && route.role !== expectedRole) throw new Error("冻结的 Provider 路由与任务角色不匹配。 ");
+      if (route && input.maxTokens !== undefined && input.maxTokens > route.maxOutputTokens) throw new Error(`请求输出预算 ${input.maxTokens} 超过当前 Provider/Workspace 有效上限 ${route.maxOutputTokens}。`);
+      const payload = toInputPayload(route ? {
+        ...input,
+        baseURL: route.baseURL,
+        model: route.model,
+        providerProfileId: route.providerProfileId,
+        protocol: route.protocol,
+        modelContextWindowTokens: route.contextWindowTokens,
+        safetyMarginRatio: route.safetyMarginRatio,
+        ...(input.maxTokens === undefined ? { maxTokens: route.maxOutputTokens } : {}),
+      } : input);
+      assertPromptFitsModelWindow(payload, payload.prompt);
       const inputObject = await options.objects.put({ content: encoder.encode(JSON.stringify(payload)), mediaType: "application/vnd.ainovr.local-creation-input+json" });
       return options.commands.execute({
         ...input.command,
@@ -128,7 +149,7 @@ export function createLocalCreationService(options: CreateLocalCreationServiceOp
       try {
         const input = await readInput(options.tasks, options.objects, taskId);
         await options.tasks.checkpoint(taskId, options.hostId, { schema_version: 1, stage: "calling_local_model", model: input.model }, null);
-        let completion = await options.caller.complete({ baseURL: input.baseURL, model: input.model, providerProfileId: input.providerProfileId, prompt: input.prompt, maxTokens: input.maxTokens, outputMode: input.outputMode }, controller.signal);
+        let completion = await options.caller.complete({ baseURL: input.baseURL, model: input.model, providerProfileId: input.providerProfileId, protocol: input.protocol, prompt: input.prompt, maxTokens: input.maxTokens, outputMode: input.outputMode }, controller.signal);
         let text = completedText(completion);
         try {
           await options.validateOutput?.(input, text);
@@ -143,11 +164,14 @@ export function createLocalCreationService(options: CreateLocalCreationServiceOp
             attempt: 1,
             diagnostic: safeTaskError(cause),
           }, null);
+          const repairPrompt = structuredRepairPrompt(input.prompt, text, safeTaskError(cause), input.metadata);
+          assertPromptFitsModelWindow(input, repairPrompt);
           completion = await options.caller.complete({
             baseURL: input.baseURL,
             model: input.model,
             providerProfileId: input.providerProfileId,
-            prompt: structuredRepairPrompt(input.prompt, text, safeTaskError(cause), input.metadata),
+            protocol: input.protocol,
+            prompt: repairPrompt,
             maxTokens: input.maxTokens,
             outputMode: input.outputMode,
           }, controller.signal);
@@ -217,7 +241,7 @@ export function createLocalCreationService(options: CreateLocalCreationServiceOp
       const model = typeof payload.model === "string" ? payload.model : "";
       const taskId = typeof payload.taskId === "string" ? payload.taskId : "";
       const metadata = record(payload.contextMetadata);
-      return { documentId: document.documentId, projectId: document.projectId, title, model, taskId, text: decoder.decode(await options.objects.read(document.contentObjectHash)), ...(metadata ? { metadata } : {}) };
+      return { documentId: document.documentId, projectId: document.projectId, revision: document.revision, title, model, taskId, text: decoder.decode(await options.objects.read(document.contentObjectHash)), ...(metadata ? { metadata } : {}) };
     },
 
     getTask(taskId) {
@@ -230,6 +254,9 @@ interface StoredLocalCreationInput extends LocalCreationOutputValidationInput {
   schema_version: 1;
   outputMode: LocalCreationOutputMode;
   providerProfileId?: string;
+  protocol?: ModelWireProtocol;
+  modelContextWindowTokens?: number;
+  safetyMarginRatio?: number;
 }
 
 function toInputPayload(input: StartLocalCreationInput): StoredLocalCreationInput {
@@ -240,7 +267,9 @@ function toInputPayload(input: StartLocalCreationInput): StoredLocalCreationInpu
   if (input.metadata !== undefined && !record(input.metadata)) throw new Error("metadata 必须是对象。 ");
   const outputMode = input.outputMode ?? "creative_text";
   if (outputMode !== "creative_text" && outputMode !== "structured_json") throw new Error("outputMode 非法。 ");
-  return { schema_version: 1, taskId: input.taskId, documentId: input.documentId, projectId: input.projectId, title: input.title, prompt: input.prompt, baseURL: input.baseURL, model: input.model, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}), maxTokens, outputMode, ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}) };
+  if ((input.modelContextWindowTokens === undefined) !== (input.safetyMarginRatio === undefined)) throw new Error("模型窗口与安全余量必须同时冻结。 ");
+  if (input.modelContextWindowTokens !== undefined && (!Number.isInteger(input.modelContextWindowTokens) || input.modelContextWindowTokens < 1024 || typeof input.safetyMarginRatio !== "number" || input.safetyMarginRatio < 0 || input.safetyMarginRatio >= 1)) throw new Error("冻结的模型窗口或安全余量无效。 ");
+  return { schema_version: 1, taskId: input.taskId, documentId: input.documentId, projectId: input.projectId, title: input.title, prompt: input.prompt, baseURL: input.baseURL, model: input.model, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}), ...(input.protocol ? { protocol: input.protocol } : {}), ...(input.modelContextWindowTokens === undefined ? {} : { modelContextWindowTokens: input.modelContextWindowTokens, safetyMarginRatio: input.safetyMarginRatio! }), maxTokens, outputMode, ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}) };
 }
 
 function modelRoleFromMetadata(metadata: Record<string, unknown> | undefined): ModelRole | null {
@@ -262,9 +291,34 @@ function isStoredInput(value: unknown): value is StoredLocalCreationInput {
   return record.schema_version === 1
     && ["taskId", "documentId", "projectId", "title", "prompt", "baseURL", "model"].every((key) => typeof record[key] === "string" && (record[key] as string).trim())
     && (record.providerProfileId === undefined || (typeof record.providerProfileId === "string" && record.providerProfileId.trim().length > 0))
+    && (record.protocol === undefined || record.protocol === "chat_completions" || record.protocol === "responses" || record.protocol === "ollama_native")
+    && ((record.modelContextWindowTokens === undefined && record.safetyMarginRatio === undefined) || (Number.isInteger(record.modelContextWindowTokens) && Number(record.modelContextWindowTokens) >= 1024 && typeof record.safetyMarginRatio === "number" && Number(record.safetyMarginRatio) >= 0 && Number(record.safetyMarginRatio) < 1))
     && Number.isInteger(record.maxTokens) && Number(record.maxTokens) >= 256 && Number(record.maxTokens) <= 16_384
     && (record.outputMode === "creative_text" || record.outputMode === "structured_json")
     && (record.metadata === undefined || !!recordValue(record.metadata));
+}
+
+/** 所有生产角色最终经此处调用模型；在任务入队前统一关闭超窗路径。 */
+function assertPromptFitsModelWindow(input: Pick<StoredLocalCreationInput, "prompt" | "maxTokens" | "outputMode" | "modelContextWindowTokens" | "safetyMarginRatio">, prompt: string): void {
+  if (input.modelContextWindowTokens === undefined || input.safetyMarginRatio === undefined) return;
+  const usableContext = Math.floor(input.modelContextWindowTokens * (1 - input.safetyMarginRatio));
+  const inputTokens = estimatePromptTokens(prompt) + messageEnvelopeTokens(input.outputMode);
+  if (inputTokens + input.maxTokens > usableContext) throw new Error(`完整模型请求超出有效上下文窗口：输入约 ${inputTokens} + 输出 ${input.maxTokens} > 可用 ${usableContext}。`);
+}
+
+function estimatePromptTokens(text: string): number {
+  let latinRun = 0;
+  let total = 0;
+  for (const character of text) {
+    if (character.codePointAt(0)! <= 0x7f) latinRun += 1;
+    else { total += 1; latinRun = 0; }
+  }
+  return Math.max(1, total + Math.ceil(latinRun / 4));
+}
+
+function messageEnvelopeTokens(outputMode: LocalCreationOutputMode): number {
+  // Local/Ollama/OpenAI-compatible/Routed caller 都发送 system + user message；结构化模式还带 JSON 约束。
+  return outputMode === "structured_json" ? 192 : 160;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
