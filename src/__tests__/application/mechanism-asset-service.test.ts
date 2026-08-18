@@ -44,10 +44,20 @@ describe("MechanismAsset Application Service", () => {
 
     const adopted = await mechanisms.listAdopted("project_001");
     expect(adopted).toEqual([expect.objectContaining({ id: "mechanism_001", targetEffect: "让读者先感到可验证的异常，再延后解释。", targetLayers: ["draft"] })]);
+    await expect(mechanisms.listAdoptedSnapshots("project_001")).resolves.toEqual([{ revision: 2, card: expect.objectContaining({ id: "mechanism_001" }) }]);
     expect(JSON.stringify(adopted)).not.toContain("示例参考");
     expect(JSON.stringify(adopted)).not.toContain("脚步声");
     await expect(driver.query<{ args_json: string }>({ sql: "SELECT args_json FROM commands WHERE tool = 'commit_mechanism_candidate'", params: [] }))
       .resolves.toEqual([expect.objectContaining({ args_json: expect.not.stringContaining("巡查员先看见") })]);
+
+    await driver.transaction([
+      { sql: "INSERT INTO artifacts (artifact_id, project_id, artifact_type, current_revision, status, created_at, updated_at) VALUES ('document:recipe-test', 'project_001', 'project_document', 1, 'approved', 1, 1)", params: [] },
+      { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES ('document:recipe-test', 1, NULL, '{}', NULL, '{}', 1)", params: [] },
+      { sql: "INSERT INTO artifact_dependencies (artifact_id, revision, depends_on_artifact_id, depends_on_revision, stale) VALUES ('document:recipe-test', 1, 'mechanism:mechanism_001', 2, 0)", params: [] },
+    ]);
+    await expect(mechanisms.review({ command: { ...command("mechanism_reject"), expectedRevision: 2, projectId: "project_001", actor: { kind: "human", id: "user_001" } }, mechanismAssetId: "mechanism_001", status: "rejected" }))
+      .resolves.toMatchObject({ kind: "ok", revision: 3 });
+    await expect(driver.query<{ stale: number }>({ sql: "SELECT stale FROM artifact_dependencies WHERE artifact_id = 'document:recipe-test'", params: [] })).resolves.toEqual([{ stale: 1 }]);
   });
 
   it("拒绝外部 Agent 自动采纳，以及不足三个不同 AnalysisUnit 的 distributed 卡", async () => {
@@ -61,9 +71,9 @@ describe("MechanismAsset Application Service", () => {
     card.id = "mechanism_distributed";
     card.scope = "distributed";
     card.evidenceInstances = [
-      { id: "instance_1", originCandidateId: "conclusion_001", spanIds: ["sp00002"], chapterIndexes: [1], threadIds: [] },
-      { id: "instance_2", originCandidateId: "conclusion_001", spanIds: ["sp00002"], chapterIndexes: [1], threadIds: [] },
-      { id: "instance_3", originCandidateId: "conclusion_001", spanIds: ["sp00002"], chapterIndexes: [1], threadIds: [] },
+      { id: "instance_1", originCandidateId: "conclusion_001", spanIds: ["segmentation_001:sp00002"], chapterIndexes: [1], threadIds: [] },
+      { id: "instance_2", originCandidateId: "conclusion_001", spanIds: ["segmentation_001:sp00002"], chapterIndexes: [1], threadIds: [] },
+      { id: "instance_3", originCandidateId: "conclusion_001", spanIds: ["segmentation_001:sp00002"], chapterIndexes: [1], threadIds: [] },
     ];
     await expect(mechanisms.propose({ command: command("mechanism_distributed"), analysisProjectId: "analysis_001", rawOutput: JSON.stringify(distributed) }))
       .rejects.toThrow(/三个不同/);
@@ -104,19 +114,19 @@ describe("MechanismAsset Application Service", () => {
     await references.importText({ command: command("reference"), referenceWorkId: "reference_001", sourceEditionId: "edition_001", title: "示例参考", text: "第一章\n门后有脚步声。" });
     await corpus.prepare({ command: command("corpus"), analysisProjectId: "analysis_001", segmentationId: "segmentation_001", sourceEditionId: "edition_001", boundary: "complete", budget: { contextWindowTokens: 4096, safetyMarginRatio: 0.2, reservedOutputTokens: 512, renderedSystemPromptTokens: 64, renderedSchemaTokens: 64, envelopeTokens: 64 } });
     const unitId = (await corpus.getOverview("analysis_001"))!.computeUnits[0]!.analysisUnitId;
-    await facts.submit({ command: command("facts"), analysisProjectId: "analysis_001", analysisUnitId: unitId, rawOutput: JSON.stringify({ facts: [{ id: "fact_001", kind: "event", rawLabel: null, statement: "脚步声出现", subject: null, object: null, evidenceSpanIds: ["sp00002"], epistemicStatus: "observed" }] }) });
-    await threads.submit({ command: command("thread"), analysisProjectId: "analysis_001", rawOutput: JSON.stringify({ threads: [{ id: "thread_001", kind: "event", title: "脚步声", episodes: [{ id: "episode_001", role: "setup", rawLabel: null, summary: "脚步声出现", evidenceSpanIds: ["sp00002"], ordinal: 1 }], epistemicStatus: "observed", lifecycle: "open" }] }) });
+    await facts.submit({ command: command("facts"), analysisProjectId: "analysis_001", analysisUnitId: unitId, rawOutput: JSON.stringify({ facts: [{ id: "fact_001", kind: "event", rawLabel: null, statement: "脚步声出现", subject: null, object: null, evidenceSpanIds: ["segmentation_001:sp00002"], epistemicStatus: "observed" }] }) });
+    await threads.submit({ command: command("thread"), analysisProjectId: "analysis_001", rawOutput: JSON.stringify({ threads: [{ id: "thread_001", kind: "event", title: "脚步声", episodes: [{ id: "episode_001", role: "setup", rawLabel: null, summary: "脚步声出现", evidenceSpanIds: ["segmentation_001:sp00002"], ordinal: 1 }], epistemicStatus: "observed", lifecycle: "open" }] }) });
     await brief.submit({ command: command("brief"), analysisProjectId: "analysis_001", rawOutput: JSON.stringify({ questions: [{ id: "question_001", question: "脚步声如何建立期待？", rationale: "验证期待线", productionUse: "指导章节入口", requiredEvidence: ["事件"], estimatedCostTokens: 256, abstentionReason: "证据不足时弃权" }] }) });
     await brief.approve({ command: command("brief_approve"), analysisProjectId: "analysis_001" });
-    await conclusions.submit({ command: command("conclusion"), analysisProjectId: "analysis_001", researchQuestionId: "question_001", rawOutput: JSON.stringify({ conclusions: [{ id: "conclusion_001", researchQuestionId: "question_001", conclusion: "异常先出现会建立未解期待。", observations: [{ id: "observation_001", statement: "脚步声被单独呈现。", evidenceSpanIds: ["sp00002"] }], evidenceSpanIds: ["sp00002"], counterEvidenceSpanIds: [], alternativeExplanations: ["局部场景调度"], applicabilityBoundaries: ["信息尚未解释的入口"], productionImplications: ["先给异常再延后解释。"], coverageStatus: "complete", epistemicStatus: "inferred" }] }) });
-    await falsification.submit({ command: command("falsification"), analysisProjectId: "analysis_001", conclusionId: "conclusion_001", rawOutput: JSON.stringify({ assessment: { conclusionId: "conclusion_001", status: "bounded", counterEvidenceSpanIds: ["sp00002"], alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["样本只覆盖一个单元"], sampleBiasNotes: ["短文本"] } }) });
+    await conclusions.submit({ command: command("conclusion"), analysisProjectId: "analysis_001", researchQuestionId: "question_001", rawOutput: JSON.stringify({ conclusions: [{ id: "conclusion_001", researchQuestionId: "question_001", conclusion: "异常先出现会建立未解期待。", observations: [{ id: "observation_001", statement: "脚步声被单独呈现。", evidenceSpanIds: ["segmentation_001:sp00002"] }], evidenceSpanIds: ["segmentation_001:sp00002"], counterEvidenceSpanIds: [], alternativeExplanations: ["局部场景调度"], applicabilityBoundaries: ["信息尚未解释的入口"], productionImplications: ["先给异常再延后解释。"], coverageStatus: "complete", epistemicStatus: "inferred" }] }) });
+    await falsification.submit({ command: command("falsification"), analysisProjectId: "analysis_001", conclusionId: "conclusion_001", rawOutput: JSON.stringify({ assessment: { conclusionId: "conclusion_001", status: "bounded", counterEvidenceSpanIds: ["segmentation_001:sp00002"], alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["样本只覆盖一个单元"], sampleBiasNotes: ["短文本"] } }) });
     return { application, mechanisms };
   }
 });
 
 function candidateOutput(): string {
   return JSON.stringify({
-    card: { id: "mechanism_001", title: "先异常后解释", observation: "异常先出现", effectHypothesis: "让读者先感到可验证的异常，再延后解释。", when: ["场景需要建立未解期待"], do: ["先给出可核验异常", "延后提供解释"], avoid: ["不要立即说明原因"], evidenceSpanIds: ["sp00002"], counterexampleSpanIds: [], epistemicStatus: "inferred", lifecycle: "candidate", falsification: { status: "bounded", alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["短样本"] }, scope: "local", applicability: ["信息尚未解释的章节入口"], targetLayers: ["draft"], adoption: "pending", originCandidateIds: ["conclusion_001"], evidenceInstances: [] },
+    card: { id: "mechanism_001", title: "先异常后解释", observation: "异常先出现", effectHypothesis: "让读者先感到可验证的异常，再延后解释。", when: ["场景需要建立未解期待"], do: ["先给出可核验异常", "延后提供解释"], avoid: ["不要立即说明原因"], evidenceSpanIds: ["segmentation_001:sp00002"], counterexampleSpanIds: [], epistemicStatus: "inferred", lifecycle: "candidate", falsification: { status: "bounded", alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["短样本"] }, scope: "local", applicability: ["信息尚未解释的章节入口"], targetLayers: ["draft"], adoption: "pending", originCandidateIds: ["conclusion_001"], evidenceInstances: [] },
     neutralExample: "巡查员先看见灯塔玻璃里掠过一束不该存在的光，直到下一段才得知那束光来自哪里。",
     forbiddenTerms: ["示例参考", "脚步声"],
   });

@@ -39,14 +39,15 @@ describe("ChapterEditor 本机定向修订任务", () => {
     const drafts = { getDraft: async (): Promise<ChapterReaderDraft | null> => v1() };
     const reviews = { get: async (): Promise<ChapterReview | null> => review() };
     const editor = createChapterEditorService({ driver, commands: application.commands, objects, baseDrafts: drafts, reviews });
+    const caller = { complete: vi.fn().mockResolvedValue({ text: patchJson(), finishReason: "stop" }) };
     const local = createLocalCreationService({
       driver, schemas, commands: application.commands, tasks: createTaskRunner(driver), objects,
-      caller: { complete: vi.fn().mockResolvedValue({ text: patchJson(), finishReason: "stop" }) }, hostId: "editor-host",
+      caller, hostId: "editor-host",
       validateOutput: validateChapterEditorPatchOutput,
       commitOutput: async ({ taskId, projectId, prompt, text, metadata, output }) => {
         const patch = parseChapterEditorPatchOutput({ taskId, projectId, prompt, metadata }, text);
         const result = await editor.create({
-          command: { ...command(`commit_${taskId}`), actor: { kind: "internal_agent", id: "editor-host" } }, projectId,
+          command: { ...command(`commit_${taskId}`), actor: { kind: "internal_agent", id: "editor-host" } }, executionRef: taskId, projectId,
           chapterId: patch.chapterId, documentId: patch.targetDocumentId, title: patch.title, sourceDraftDocumentId: patch.sourceDraftDocumentId,
           reviewId: patch.reviewId, selectedIssueIds: patch.selectedIssueIds, editedText: patch.editedText, rationale: patch.rationale, model: "qwen3.5:9b", rawOutput: output,
         });
@@ -61,6 +62,9 @@ describe("ChapterEditor 本机定向修订任务", () => {
       rationale: "只修正潮水逻辑链。", baseURL: "http://localhost:11434/v1", model: "qwen3.5:9b", maxTokens: 1024,
     })).resolves.toMatchObject({ kind: "accepted", taskId: "editor_task_001" });
     await expect(tasks.run("editor_task_001")).resolves.toMatchObject({ status: "succeeded" });
+    expect(caller.complete).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining("唯一可替换原文片段（字面量，不得添加前后字符）"),
+    }), expect.any(AbortSignal));
     await expect(editor.getDraft("production:chapter_draft:chapter_001:v2")).resolves.toMatchObject({
       parentDocumentId: v1().documentId,
       revision: "v2",
@@ -105,7 +109,7 @@ describe("ChapterEditor 本机定向修订任务", () => {
 });
 
 function v1(): ChapterReaderDraft {
-  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", taskId: "writer_task_001", revision: "v1" };
+  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", executionRef: "writer_task_001", revision: "v1" };
 }
 
 function review(): ChapterReview {

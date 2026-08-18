@@ -22,7 +22,8 @@ export interface ChapterReaderDraft {
   title: string;
   text: string;
   model: string;
-  taskId: string;
+  /** 产生该草稿的持久任务 id；人工或外部 Agent 直写时为命令 id。 */
+  executionRef: string;
   revision: ChapterDraftRevision;
 }
 

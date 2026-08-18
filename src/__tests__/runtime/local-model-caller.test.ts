@@ -84,6 +84,13 @@ describe("本地模型调用器", () => {
     expect(body.messages[0]?.content).not.toContain("只输出正文");
   });
 
+  it("显式 Ollama 原生协议允许无 /v1 的本机根地址", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: { content: "完成" }, done_reason: "stop" }), { status: 200 }));
+    const caller = createLocalModelCaller({ fetch });
+    await expect(caller.complete({ baseURL: "http://localhost:11434", protocol: "ollama_native", model: "qwen3:8b", prompt: "提取", maxTokens: 1024 }, new AbortController().signal)).resolves.toEqual({ text: "完成", finishReason: "stop" });
+    expect(fetch).toHaveBeenCalledWith("http://localhost:11434/api/chat", expect.anything());
+  });
+
   it("本地服务在 2xx 响应中返回错误字段时保留可行动摘要，而非伪报缺少 choices", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "requested tokens exceed context window" }), { status: 200, headers: { "content-type": "application/json" } }));
     const caller = createLocalModelCaller({ fetch });

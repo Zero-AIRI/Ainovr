@@ -115,7 +115,7 @@ describe("ChapterReviewer 本机任务", () => {
 });
 
 function draft() {
-  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", taskId: "writer_task_001", revision: "v1" as const };
+  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", executionRef: "writer_task_001", revision: "v1" as const };
 }
 
 function manifestIds(): string[] { return ["reader_immersive", "reader_low", "reader_logic"]; }

@@ -161,8 +161,9 @@ async function readProjectSpanIds(driver: SqlDriver, analysisProjectId: string):
   const rows = await driver.query<{ span_id: string }>({
     sql: `SELECT span.span_id
           FROM source_spans span
-          INNER JOIN analysis_projects project ON project.source_edition_id = span.source_edition_id
-          WHERE project.analysis_project_id = ?
+          INNER JOIN analysis_units unit ON unit.analysis_unit_id = span.analysis_unit_id
+          INNER JOIN analysis_projects project ON project.segmentation_id = unit.segmentation_id
+          WHERE project.analysis_project_id = ? AND unit.segmentation_id = project.segmentation_id
           ORDER BY span.start_byte ASC, span.span_id ASC`,
     params: [analysisProjectId],
   });

@@ -125,7 +125,7 @@ describe("Workspace Application Service", () => {
       { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, 1, NULL, ?, ?, ?, ?)", params: ["document:production:chapter_text:chapter_truth_002", '{"schema_version":1,"kind":"chapter_text","title":"第二章"}', objectHash, '{"kind":"human","id":"user_001"}', now] },
       { sql: "INSERT INTO canon_entries (canon_entry_id, project_id, payload_json, revision, status, created_at, updated_at) VALUES (?, ?, ?, 3, 'canonical', ?, ?)", params: ["canon_tide_rule", "project_truth_001", '{"schema_version":1,"summary":"倒走最多七分钟"}', now, now] },
       { sql: "INSERT INTO reader_promises (reader_promise_id, project_id, chapter_id, payload_json, status, revision, created_at, updated_at) VALUES (?, ?, ?, ?, 'establish', 2, ?, ?)", params: ["promise_future_letter", "project_truth_001", "chapter_truth_002", '{"schema_version":1,"summary":"未来来信的去向"}', now, now] },
-      { sql: "INSERT INTO production_commits (production_commit_id, project_id, chapter_id, accepted_document_id, manifest_object_hash, run_id, actor_json, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)", params: ["commit_truth_002", "project_truth_001", "chapter_truth_002", "production:chapter_text:chapter_truth_002", objectHash, '{"kind":"human","id":"user_001"}', now] },
+      { sql: "INSERT INTO production_commits (production_commit_id, project_id, chapter_id, accepted_document_id, manifest_object_hash, run_id, lineage_json, actor_json, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)", params: ["commit_truth_002", "project_truth_001", "chapter_truth_002", "production:chapter_text:chapter_truth_002", objectHash, '{"schema_version":1,"selectedDraftDocumentId":"draft","selectedDraftRevision":"v1","selectedDraftExecutionRef":"task","manifestId":"manifest","reviewIds":[],"model":"model","runId":null}', '{"kind":"human","id":"user_001"}', now] },
     ]);
 
     await expect(application.queries.getProjectWorkbench("project_truth_001")).resolves.toEqual(expect.objectContaining({
@@ -134,6 +134,54 @@ describe("Workspace Application Service", () => {
       readerPromises: [expect.objectContaining({ readerPromiseId: "promise_future_letter", chapterId: "chapter_truth_002", status: "establish", summary: "未来来信的去向" })],
       productionCursor: expect.objectContaining({ chapterId: "chapter_truth_002", ordinal: 2, productionCommitId: "commit_truth_002", nextChapterOrdinal: 3 }),
     }));
+  });
+
+  it("为作品页投影固定的线性章节生产链，并显示任务失败、stale 与阻塞原因", async () => {
+    const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    await application.commands.execute(envelope({ tool: "create_novel_project", args: { projectId: "project_chain", title: "生产链", status: "writing", payload: { schema_version: 1 } } }));
+    const save = async (id: string, type: string, status: string, payload: Record<string, unknown>) => application.commands.execute({
+      ...envelope({ tool: "commit_project_planning_document", args: { projectId: "project_chain", documentId: id, documentType: type, status, expectedRevision: null, payload: { schema_version: 1, ...payload } } }),
+      commandId: `command_${id}`, idempotencyKey: `idem_${id}`, projectId: "project_chain",
+    });
+    await save("planning:project_chain:chapter_contract:chapter_001", "chapter_contract", "approved", { kind: "chapter_contract", chapterId: "chapter_001", ordinal: 1 });
+    await save("production:creative_recipe:chapter_001", "creative_recipe", "approved", { kind: "creative_recipe", chapterId: "chapter_001" });
+    await save("production:context_manifest:manifest_001", "context_manifest", "frozen", { kind: "context_manifest", manifestId: "manifest_001", chapterId: "chapter_001", taskRole: "writer" });
+    await save("production:chapter_draft:chapter_001:v1", "local_creation_draft", "draft", { kind: "local_creation_draft", taskId: "writer_failed", model: "qwen3.5:9b", contextMetadata: { kind: "chapter_writer_draft", chapterId: "chapter_001", revision: "v1" } });
+    await driver.execute({ sql: "INSERT INTO tasks (task_id, resource_key, task_type, status, input_object_hash, output_object_hash, lease_owner, lease_expires_at, retry_count, created_at, updated_at) VALUES (?, ?, 'chapter_writer', 'failed', NULL, NULL, NULL, NULL, 1, ?, ?)", params: ["writer_failed", "project:project_chain:chapter:chapter_001", 1_700_000_000_000, 1_700_000_000_000] });
+
+    const view = await application.queries.getProjectWorkbench("project_chain");
+    expect(view?.productionChains).toEqual([
+      expect.objectContaining({
+        chapterId: "chapter_001", ordinal: 1,
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ stage: "chapter_contract", status: "approved", revision: 1 }),
+          expect.objectContaining({ stage: "writer_v1", status: "failed", executionRef: "writer_failed", model: "qwen3.5:9b", blockingReason: expect.stringMatching(/失败|重试/) }),
+          expect.objectContaining({ stage: "reader_immersive", status: "not_started", blockingReason: expect.stringMatching(/Writer/) }),
+          expect.objectContaining({ stage: "production_commit", status: "not_started" }),
+        ]),
+      }),
+    ]);
+  });
+
+  it("章节契约待审核时不会被生产链误报为可用产物", async () => {
+    const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    await application.commands.execute(envelope({ tool: "create_novel_project", args: { projectId: "project_pending_chain", title: "待审核生产链", status: "planning", payload: { schema_version: 1 } } }));
+    await driver.execute({ sql: "INSERT INTO chapters (chapter_id, project_id, branch_id, ordinal, status, current_revision, created_at, updated_at) VALUES (?, ?, NULL, ?, 'planned', 1, ?, ?)", params: ["chapter_001", "project_pending_chain", 1, 1_700_000_000_000, 1_700_000_000_000] });
+    await application.commands.execute({
+      ...envelope({
+      tool: "commit_project_planning_document",
+      args: { projectId: "project_pending_chain", documentId: "planning:project_pending_chain:chapter_contract:chapter_001", documentType: "chapter_contract", status: "pending_review", expectedRevision: null, payload: { schema_version: 1, kind: "chapter_contract", chapterId: "chapter_001", ordinal: 1 } },
+      }),
+      commandId: "command_pending_chain_contract",
+      idempotencyKey: "idem_pending_chain_contract",
+    });
+
+    const view = await application.queries.getProjectWorkbench("project_pending_chain");
+    expect(view?.productionChains[0]?.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "chapter_contract", status: "pending_review", blockingReason: expect.stringMatching(/审核|批准/) }),
+    ]));
   });
 
   it("为待处理页汇总待采纳机制和跨参考的 Coverage 缺口，不返回原文对象", async () => {
@@ -152,6 +200,8 @@ describe("Workspace Application Service", () => {
       { sql: "INSERT INTO source_editions (source_edition_id, reference_work_id, raw_object_hash, normalized_object_hash, source_hash, encoding, byte_length, token_estimate, created_at) VALUES (?, ?, ?, ?, ?, 'utf-8', 4, 4, ?)", params: ["edition_pending_001", "reference_pending_001", objectHash, objectHash, objectHash, now] },
       { sql: "INSERT INTO analysis_projects (analysis_project_id, source_edition_id, segmentation_id, status, current_revision, created_at, updated_at) VALUES (?, ?, NULL, 'mechanism_review', 1, ?, ?)", params: ["analysis_pending_001", "edition_pending_001", now, now] },
       { sql: "INSERT INTO mechanism_assets (mechanism_asset_id, analysis_project_id, status, current_revision, created_at, updated_at) VALUES (?, ?, 'candidate', 1, ?, ?)", params: ["mechanism_pending_001", "analysis_pending_001", now, now] },
+      { sql: "INSERT INTO artifacts (artifact_id, project_id, artifact_type, current_revision, status, created_at, updated_at) VALUES (?, NULL, 'mechanism_asset', 1, 'candidate', ?, ?)", params: ["mechanism:mechanism_pending_001", now, now] },
+      { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, 1, NULL, ?, ?, ?, ?)", params: ["mechanism:mechanism_pending_001", '{"schema_version":1}', objectHash, '{"kind":"human","id":"fixture"}', now] },
       { sql: "INSERT INTO mechanism_asset_revisions (mechanism_asset_id, revision, payload_json, neutral_example_object_hash, created_at) VALUES (?, 1, ?, ?, ?)", params: ["mechanism_pending_001", JSON.stringify({ schema_version: 1, kind: "mechanism_asset", rawOutputObjectHash: objectHash, forbiddenTerms: [], card: { id: "mechanism_pending_001", title: "异常先于解释", observation: "异常先发生", effectHypothesis: "建立可验证的下一步期待", when: ["需要建立期待"], do: ["先展示异常"], avoid: ["立即解释"], evidenceSpanIds: ["span_pending_001"], counterexampleSpanIds: [], epistemicStatus: "inferred", lifecycle: "candidate", falsification: { status: "bounded", alternativeExplanations: [], applicabilityLimits: [] }, scope: "distributed", applicability: ["章节开场"], targetLayers: ["draft"], adoption: "pending", originCandidateIds: ["conclusion_pending_001"], evidenceInstances: [{ id: "evidence_pending_001", originCandidateId: "conclusion_pending_001", spanIds: ["span_pending_001"], chapterIndexes: [0], threadIds: [] }] } }), objectHash, now] },
       { sql: "INSERT INTO coverage_entries (coverage_entry_id, analysis_project_id, analysis_unit_id, module, status, reason, payload_json, created_at) VALUES (?, ?, NULL, 'fact_ledger', 'failed', 'invalid_output', ?, ?)", params: ["coverage_pending_001", "analysis_pending_001", '{"schema_version":1}', now] },
     ]);
@@ -286,7 +336,7 @@ describe("Workspace Application Service", () => {
     const application = createWorkspaceApplicationService({ driver, schemas });
     await driver.execute({
       sql: "INSERT INTO provider_profiles (provider_profile_id, name, base_url, default_model, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      params: ["provider_local", "本机 Ollama", "http://localhost:11434/v1", "qwen3.5:9b", '{"schema_version":1}', 1_700_000_000_000, 1_700_000_000_000],
+      params: ["provider_local", "本机 Ollama", "http://localhost:11434/v1", "qwen3.5:9b", JSON.stringify({ schema_version: 1, kind: "provider_profile", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "qwen3.5:9b", routes: [{ role: "writer", model: "qwen3.5:9b" }] }), 1_700_000_000_000, 1_700_000_000_000],
     });
     await driver.execute({
       sql: "INSERT INTO model_routes (route_id, role, provider_profile_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -298,7 +348,11 @@ describe("Workspace Application Service", () => {
         providerProfileId: "provider_local",
         name: "本机 Ollama",
         baseURL: "http://localhost:11434/v1",
+        protocol: "chat_completions",
         defaultModel: "qwen3.5:9b",
+        contextWindowTokens: 4096,
+        maxOutputTokens: 1024,
+        safetyMarginRatio: 0.2,
         revision: 1,
         routes: [{ role: "writer", model: "qwen3.5:9b" }],
       },
@@ -311,20 +365,37 @@ describe("Workspace Application Service", () => {
     const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
 
     await expect(application.commands.execute({
-      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", defaultModel: "qwen3.5:9b", routes: [{ role: "writer", model: "qwen3.5:9b" }] } }),
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "qwen3.5:9b", routes: [{ role: "writer", model: "qwen3.5:9b" }] } }),
       commandId: "command_provider_create", idempotencyKey: "idem_provider_create",
     })).resolves.toEqual({ kind: "ok", revision: 1, resourceRefs: [{ type: "provider_profile", id: "provider_local" }] });
     await expect(application.queries.listProviderProfiles()).resolves.toEqual([expect.objectContaining({ providerProfileId: "provider_local", revision: 1, defaultModel: "qwen3.5:9b", routes: [{ role: "writer", model: "qwen3.5:9b" }] })]);
 
-    await expect(application.commands.execute({
-      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", defaultModel: "qwen3:8b", routes: [{ role: "writer", model: "qwen3:8b" }, { role: "reviewer", model: "qwen3.5:9b" }] } }),
+    const providerUpdate = await application.commands.execute({
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "qwen3:8b", routes: [{ role: "writer", model: "qwen3:8b" }, { role: "reviewer", model: "qwen3.5:9b" }] } }),
       commandId: "command_provider_update", idempotencyKey: "idem_provider_update", expectedRevision: 1,
+    });
+    expect(providerUpdate).toMatchObject({ kind: "needs_confirmation", risk: "provider_profile_update" });
+    if (providerUpdate.kind !== "needs_confirmation") throw new Error("expected provider confirmation");
+    await expect(application.queries.getConfirmation(providerUpdate.confirmationId)).resolves.toMatchObject({
+      targetSummary: expect.stringContaining("Provider：provider_local"),
+    });
+    await expect(application.commands.approveConfirmation({
+      confirmationId: providerUpdate.confirmationId,
+      actor: { kind: "human_via_agent", id: "test" },
+      reason: "用户确认更新现有 Provider 端点、协议或路由。",
     })).resolves.toEqual({ kind: "ok", revision: 2, resourceRefs: [{ type: "provider_profile", id: "provider_local" }] });
     await expect(application.queries.listProviderProfiles()).resolves.toEqual([expect.objectContaining({ providerProfileId: "provider_local", revision: 2, defaultModel: "qwen3:8b", routes: [{ role: "reviewer", model: "qwen3.5:9b" }, { role: "writer", model: "qwen3:8b" }] })]);
 
-    await expect(application.commands.execute({
-      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local", name: "过期窗口中的本机 Ollama", baseURL: "http://localhost:11434/v1", defaultModel: "qwen3:8b", routes: [{ role: "writer", model: "qwen3:8b" }] } }),
+    const staleProviderUpdate = await application.commands.execute({
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local", name: "过期窗口中的本机 Ollama", baseURL: "http://localhost:11434/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "qwen3:8b", routes: [{ role: "writer", model: "qwen3:8b" }] } }),
       commandId: "command_provider_stale", idempotencyKey: "idem_provider_stale", expectedRevision: 1,
+    });
+    expect(staleProviderUpdate).toMatchObject({ kind: "needs_confirmation", risk: "provider_profile_update" });
+    if (staleProviderUpdate.kind !== "needs_confirmation") throw new Error("expected stale provider confirmation");
+    await expect(application.commands.approveConfirmation({
+      confirmationId: staleProviderUpdate.confirmationId,
+      actor: { kind: "human_via_agent", id: "test" },
+      reason: "验证批准时重新检查过期 revision。",
     })).resolves.toEqual({
       kind: "conflict",
       currentRevision: 2,
@@ -333,13 +404,28 @@ describe("Workspace Application Service", () => {
     await expect(application.queries.listProviderProfiles()).resolves.toEqual([expect.objectContaining({ providerProfileId: "provider_local", revision: 2, name: "本机 Ollama" })]);
 
     await expect(application.commands.execute({
-      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_rejected", name: "不安全", baseURL: "https://example.invalid/v1", defaultModel: "x", apiKey: "must-not-be-stored", routes: [] } }),
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_rejected", name: "不安全", baseURL: "https://example.invalid/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "x", apiKey: "must-not-be-stored", routes: [] } }),
       commandId: "command_provider_secret", idempotencyKey: "idem_provider_secret",
     })).resolves.toMatchObject({ kind: "blocked", diagnostics: [expect.objectContaining({ code: "invalid_args" })] });
 
     await expect(application.commands.execute({
-      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_url_secret", name: "不安全 URL", baseURL: "https://key@example.invalid/v1?token=hidden", defaultModel: "x", routes: [{ role: "writer", model: "x" }] } }),
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_url_secret", name: "不安全 URL", baseURL: "https://key@example.invalid/v1?token=hidden", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "x", routes: [{ role: "writer", model: "x" }] } }),
       commandId: "command_provider_url_secret", idempotencyKey: "idem_provider_url_secret",
+    })).resolves.toMatchObject({ kind: "blocked", diagnostics: [expect.objectContaining({ code: "invalid_args" })] });
+
+    await expect(application.commands.execute({
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_http_cloud", name: "明文云端", baseURL: "http://api.example.invalid/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "x", routes: [{ role: "reader", model: "x" }] } }),
+      commandId: "command_provider_http_cloud", idempotencyKey: "idem_provider_http_cloud",
+    })).resolves.toMatchObject({ kind: "blocked", diagnostics: [expect.objectContaining({ code: "invalid_args" })] });
+
+    await expect(application.commands.execute({
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_remote_ollama", name: "远程 Ollama", baseURL: "https://ollama.example.invalid", protocol: "ollama_native", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "x", routes: [{ role: "editor", model: "x" }] } }),
+      commandId: "command_provider_remote_ollama", idempotencyKey: "idem_provider_remote_ollama",
+    })).resolves.toMatchObject({ kind: "blocked", diagnostics: [expect.objectContaining({ code: "invalid_args" })] });
+
+    await expect(application.commands.execute({
+      ...envelope({ tool: "save_provider_profile", args: { providerProfileId: "provider_local_responses", name: "本地 Responses", baseURL: "http://localhost:11434/v1", protocol: "responses", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "x", routes: [{ role: "editor", model: "x" }] } }),
+      commandId: "command_provider_local_responses", idempotencyKey: "idem_provider_local_responses",
     })).resolves.toMatchObject({ kind: "blocked", diagnostics: [expect.objectContaining({ code: "invalid_args" })] });
   });
 

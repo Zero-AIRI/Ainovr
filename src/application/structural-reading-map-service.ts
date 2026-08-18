@@ -87,8 +87,12 @@ async function readCorpusMetadata(driver: SqlDriver, analysisProjectId: string):
       params: [project.segmentation_id],
     }),
     driver.query<{ span_id: string; analysis_unit_id: string; start_byte: number; end_byte: number; locator_json: string }>({
-      sql: "SELECT span_id, analysis_unit_id, start_byte, end_byte, locator_json FROM source_spans WHERE source_edition_id = ? AND analysis_unit_id IS NOT NULL ORDER BY start_byte ASC, span_id ASC",
-      params: [project.source_edition_id],
+      sql: `SELECT span.span_id, span.analysis_unit_id, span.start_byte, span.end_byte, span.locator_json
+            FROM source_spans span
+            INNER JOIN analysis_units unit ON unit.analysis_unit_id = span.analysis_unit_id
+            WHERE unit.segmentation_id = ? AND span.source_edition_id = ?
+            ORDER BY span.start_byte ASC, span.span_id ASC`,
+      params: [project.segmentation_id, project.source_edition_id],
     }),
   ]);
   const spansByUnit = new Map<string, Array<{ spanId: string; kind: string; startByte: number; endByte: number }>>();

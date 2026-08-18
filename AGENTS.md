@@ -26,7 +26,8 @@ CLI / stdio MCP ─────────────────────�
 5. API Key 只属于运行时 SecretStore（当前 Node CLI/MCP 从进程环境读取），绝不读取、打印、回显、导出、记录或传入 SQLite、ObjectStore、日志、审计或 Prompt；不要重新引入 `data/settings.json` 或旧配置脚本。
 6. Writer 只能读取已采纳、去来源化的机制投影。Writer ContextManifest 不得包含参考作品书名、人物、剧情、原文或 provenance。
 7. MCP/CLI 只暴露领域命令。禁止添加 SQL、任意路径读写、`read_data_file` 或 `write_data_file` 工具。
-8. 删除、外部绝对路径导入、恢复/覆盖等高风险动作必须走持久 confirmation；Agent 代用户批准时记录 `human_via_agent`，并重新检查命令 Hash、revision、策略和目标。
+8. PipelineRevision 的步骤必须显式保存 `dependsOn`；循环、缺失依赖和跳过前置节点必须 fail closed。可执行模型步骤只读取创建 PipelineRun 时冻结的无 Secret RouteSnapshot。
+9. 删除、外部绝对路径导入、恢复/覆盖等高风险动作必须走持久 confirmation；Agent 代用户批准时记录 `human_via_agent`，并重新检查命令 Hash、revision、策略和目标。
 
 ## 分析与生产契约
 

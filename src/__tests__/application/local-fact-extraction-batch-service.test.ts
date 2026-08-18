@@ -33,7 +33,7 @@ describe("本地 FactExtractor 批任务", () => {
       baseURL: "http://localhost:11434/v1", model: "qwen3.5:9b", maxTokens: 1024,
     })).resolves.toEqual({ kind: "accepted", taskId: "batch_task_001" });
 
-    await expect(harness.service.run("batch_task_001")).resolves.toMatchObject({ taskId: "batch_task_001", status: "succeeded" });
+    await expect(harness.service.run("batch_task_001")).resolves.toMatchObject({ taskId: "batch_task_001", status: "failed" });
     expect(harness.extraction.start).toHaveBeenCalledTimes(3);
     expect(harness.extraction.run).toHaveBeenCalledTimes(3);
     expect(harness.extraction.start.mock.calls.map(([input]) => input.analysisUnitId)).toEqual([
@@ -47,11 +47,7 @@ describe("本地 FactExtractor 批任务", () => {
       expect.objectContaining({ kind: "local_fact_extraction_batch", nextOrdinal: 2, succeeded: 1, failed: 0 }),
       expect.objectContaining({ kind: "local_fact_extraction_batch", nextOrdinal: 4, succeeded: 2, failed: 1 }),
     ]));
-    const output = await driver.query<{ output_object_hash: string | null; object_count: number }>({
-      sql: "SELECT t.output_object_hash, COUNT(o.sha256) AS object_count FROM tasks t LEFT JOIN objects o ON o.sha256 = t.output_object_hash WHERE t.task_id = ? GROUP BY t.task_id",
-      params: ["batch_task_001"],
-    });
-    expect(output).toEqual([expect.objectContaining({ output_object_hash: expect.stringMatching(/^[a-f0-9]{64}$/), object_count: 1 })]);
+    await expect(harness.tasks.get("batch_task_001")).resolves.toMatchObject({ status: "failed", retryCount: 0 });
     expect(harness.extraction.start.mock.calls[0]?.[0].command.actor).toEqual({ kind: "internal_agent", id: "batch-test" });
   });
 
@@ -110,7 +106,36 @@ describe("本地 FactExtractor 批任务", () => {
     expect(harness.extraction.start.mock.calls.map(([input]) => input.analysisUnitId)).toEqual(["analysis_001:unit:00003"]);
   });
 
-  async function prepare(outcomes: Array<"succeeded" | "failed" | "throw">, options: { hostId?: string } = {}) {
+  it("父任务失败后只重跑失败子单元，并在成功后清除 unresolved failure", async () => {
+    const harness = await prepare(["failed", "succeeded", "succeeded", "succeeded"]);
+    await harness.service.start({ command: command("batch_failed_child"), taskId: "batch_failed_child", analysisProjectId: "analysis_001", baseURL: "http://localhost:11434/v1", model: "qwen3:8b", maxTokens: 1024 });
+    await expect(harness.service.run("batch_failed_child")).resolves.toMatchObject({ status: "failed" });
+    await harness.tasks.retry("batch_failed_child");
+    await expect(harness.service.run("batch_failed_child")).resolves.toMatchObject({ status: "succeeded" });
+    expect(harness.extraction.start.mock.calls.map(([input]) => input.analysisUnitId)).toEqual([
+      "analysis_001:unit:00001", "analysis_001:unit:00002", "analysis_001:unit:00003", "analysis_001:unit:00001",
+    ]);
+    const checkpoints = (await harness.tasks.get("batch_failed_child"))?.checkpoints ?? [];
+    expect(checkpoints).toEqual(expect.arrayContaining([expect.objectContaining({ failed: 0, failedOrdinals: [] })]));
+  });
+
+  it("在父任务入队时冻结无 Secret 的 FactExtractor 路由，恢复时不重新解析 Provider", async () => {
+    const route = {
+      role: "fact_extractor" as const, providerProfileId: "provider_local", baseURL: "http://127.0.0.1:11434/v1", model: "qwen3.5:9b", protocol: "ollama_native" as const,
+      contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, isCloud: false, cloudEscalation: "never" as const,
+    };
+    const modelResolver = { resolve: vi.fn(async () => route) };
+    const harness = await prepare(["succeeded", "succeeded", "succeeded"], { modelResolver });
+    await harness.service.start({ command: command("frozen_route"), taskId: "batch_frozen_route", analysisProjectId: "analysis_001", baseURL: "http://configured-route.invalid/v1", model: "configured-route" });
+    route.model = "changed-after-start";
+    await expect(harness.service.run("batch_frozen_route")).resolves.toMatchObject({ status: "succeeded" });
+    expect(modelResolver.resolve).toHaveBeenCalledTimes(1);
+    expect(harness.extraction.start).toHaveBeenCalledWith(expect.objectContaining({
+      baseURL: "http://127.0.0.1:11434/v1", model: "qwen3.5:9b", frozenRoute: expect.objectContaining({ model: "qwen3.5:9b", protocol: "ollama_native" }),
+    }));
+  });
+
+  async function prepare(outcomes: Array<"succeeded" | "failed" | "throw">, options: { hostId?: string; modelResolver?: { resolve: ReturnType<typeof vi.fn> } } = {}) {
     let clock = 1_700_000_000_000;
     const now = () => clock;
     const schemas = createSchemaRegistry();
@@ -153,6 +178,7 @@ describe("本地 FactExtractor 批任务", () => {
         corpus,
         extraction,
         hostId: options.hostId ?? "batch-test",
+        ...(options.modelResolver ? { modelResolver: options.modelResolver as never } : {}),
         now,
       }),
     };

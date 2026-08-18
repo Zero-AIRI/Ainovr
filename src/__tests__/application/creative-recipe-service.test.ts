@@ -21,7 +21,7 @@ describe("CreativeRecipe Application Service", () => {
   });
   afterEach(async () => { await driver?.close(); await rm(workspacePath, { recursive: true, force: true }); });
 
-  it("仅把当前项目已采纳的去来源化卡片冻结到本章 Recipe，拒绝缺失或未采纳的选择", async () => {
+  it("无本章采用记录的普通章节冻结空方法 Recipe，不从 ChapterContract 推断方法选择", async () => {
     const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
     const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
     await application.commands.execute({ ...command("project"), tool: "create_novel_project", args: { projectId: "project_001", title: "潮汐钟楼", status: "planning", payload: { schema_version: 1 } } });
@@ -33,31 +33,31 @@ describe("CreativeRecipe Application Service", () => {
       },
     });
     const safeCard: TransferMechanismCard = { id: "mechanism_safe", title: "异常先于解释", targetEffect: "建立可验证期待", scope: "distributed", when: ["场景首次出现异常"], operations: ["先呈现异常痕迹"], avoid: ["先解释原因"], applicability: ["信息受限场景"], targetLayers: ["draft", "editor"] };
-    const recipes = createCreativeRecipeService({ driver, commands: application.commands, mechanisms: { listAdopted: async () => [safeCard] } });
+    await driver.transaction([
+      { sql: "INSERT INTO artifacts (artifact_id, project_id, artifact_type, current_revision, status, created_at, updated_at) VALUES (?, NULL, 'mechanism_asset', 1, 'verified', ?, ?)", params: ["mechanism:mechanism_safe", 1_700_000_000_000, 1_700_000_000_000] },
+      { sql: "INSERT INTO artifact_revisions (artifact_id, revision, parent_revision, payload_json, content_object_hash, actor_json, created_at) VALUES (?, 1, NULL, ?, NULL, ?, ?)", params: ["mechanism:mechanism_safe", '{"schema_version":1}', '{"kind":"human","id":"user_001"}', 1_700_000_000_000] },
+    ]);
+    const recipes = createCreativeRecipeService({ driver, commands: application.commands, mechanisms: { listAdoptedSnapshots: async () => [{ revision: 1, card: safeCard }] }, applications: { get: async () => null } });
 
     await expect(recipes.create({ command: command("recipe"), projectId: "project_001", chapterId: "chapter_001" }))
       .resolves.toMatchObject({ kind: "ok", revision: 1 });
     await expect(recipes.get({ projectId: "project_001", chapterId: "chapter_001" })).resolves.toEqual(expect.objectContaining({
-      chapterId: "chapter_001", mechanismCardIds: ["mechanism_safe"], writerMechanisms: [safeCard],
+      chapterId: "chapter_001", mechanismAssetId: null, writerMechanisms: [],
     }));
     const stored = await recipes.get({ projectId: "project_001", chapterId: "chapter_001" });
     expect(JSON.stringify(stored)).not.toMatch(/source|provenance|span|evidence|原文/i);
+    await expect(driver.query<{ depends_on_artifact_id: string; depends_on_revision: number }>({ sql: "SELECT depends_on_artifact_id, depends_on_revision FROM artifact_dependencies WHERE artifact_id = ? ORDER BY depends_on_artifact_id", params: ["document:production:creative_recipe:chapter_001"] }))
+      .resolves.toEqual([
+        { depends_on_artifact_id: "document:planning:project_001:chapter_contract:chapter_001", depends_on_revision: 1 },
+      ]);
+    await expect(recipes.get({ projectId: "project_001", chapterId: "chapter_001" })).resolves.toMatchObject({ mechanismAssetId: null });
 
-    await application.commands.execute({
-      ...command("contract_missing"), projectId: "project_001", tool: "commit_project_planning_document",
-      args: {
-        projectId: "project_001", documentId: "planning:project_001:chapter_contract:chapter_002", documentType: "chapter_contract", status: "approved", expectedRevision: null,
-        payload: { schema_version: 1, kind: "chapter_contract", chapterId: "chapter_002", ordinal: 2, entryState: ["入口"], exitState: ["出口"], desire: "确认", pressure: "时间", turningPoint: "变化", mustNotHappen: [], readerPromiseAction: "reinforce", emotionalCycle: "压迫升级", nextChapterInterface: ["下一场"], mechanismCardIds: ["mechanism_unadopted"] },
-      },
-    });
-    await expect(recipes.create({ command: command("recipe_missing"), projectId: "project_001", chapterId: "chapter_002" }))
-      .rejects.toThrow(/采纳|去来源化/);
   });
 
   it("MCP 仅在配置 Recipe Application Service 时暴露生产配方工具", async () => {
     const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
     const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
-    const recipes = createCreativeRecipeService({ driver, commands: application.commands, mechanisms: { listAdopted: async () => [] } });
+    const recipes = createCreativeRecipeService({ driver, commands: application.commands, mechanisms: { listAdoptedSnapshots: async () => [] }, applications: { get: async () => null } });
     const handler = createApplicationMcpJsonRpcHandler({ application, recipes });
 
     const listed = await handler({ jsonrpc: "2.0", id: 1, method: "tools/list" });

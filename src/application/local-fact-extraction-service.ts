@@ -7,7 +7,7 @@ import { parseFactExtractionOutput } from "@/lib/analysis/evidence-validation";
 import { sha256Hex } from "@/lib/sha256";
 import type { ObjectStore } from "@/persistence/object-store";
 import type { SqlDriver } from "@/persistence/sql-driver";
-import type { ModelResolver } from "@/application/model-resolver";
+import type { ModelResolver, ModelWireProtocol, ResolvedModelRoute } from "@/application/model-resolver";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -16,6 +16,7 @@ export interface LocalFactExtractionRequest {
   baseURL: string;
   model: string;
   providerProfileId?: string;
+  protocol?: ModelWireProtocol;
   systemPrompt: string;
   prompt: string;
   maxTokens: number;
@@ -33,6 +34,9 @@ export interface StartLocalFactExtractionInput {
   baseURL: string;
   model: string;
   providerProfileId?: string;
+  protocol?: ModelWireProtocol;
+  /** 由父级可恢复运行冻结的无 Secret Provider 路由；外部 MCP 输入不能提供该字段。 */
+  frozenRoute?: ResolvedModelRoute;
   maxTokens?: number;
 }
 
@@ -74,8 +78,10 @@ export function createLocalFactExtractionService(options: CreateLocalFactExtract
   const running = new Map<string, AbortController>();
   return {
     async start(input) {
-      const route = options.modelResolver ? await options.modelResolver.resolve({ role: "fact_extractor", complexity: "routine" }) : null;
-      const payload = toStoredInput(route ? { ...input, baseURL: route.baseURL, model: route.model, providerProfileId: route.providerProfileId } : input);
+      const route = input.frozenRoute ?? (options.modelResolver ? await options.modelResolver.resolve({ role: "fact_extractor", complexity: "routine" }) : null);
+      if (route && route.role !== "fact_extractor") throw new Error("冻结的 Provider 路由不属于 FactExtractor。 ");
+      if (route && input.maxTokens !== undefined && input.maxTokens > route.maxOutputTokens) throw new Error(`请求输出预算 ${input.maxTokens} 超过当前 Provider/Workspace 有效上限 ${route.maxOutputTokens}。`);
+      const payload = toStoredInput(route ? { ...input, baseURL: route.baseURL, model: route.model, providerProfileId: route.providerProfileId, protocol: route.protocol, ...(input.maxTokens === undefined ? { maxTokens: route.maxOutputTokens } : {}) } : input, route?.maxOutputTokens);
       const inputObject = await options.objects.put({ content: encoder.encode(JSON.stringify(payload)), mediaType: "application/vnd.ainovr.local-fact-extraction-input+json" });
       return options.commands.execute({
         ...input.command,
@@ -88,6 +94,8 @@ export function createLocalFactExtractionService(options: CreateLocalFactExtract
       if (!input.taskId.trim()) throw new Error("taskId 必须是非空字符串。 ");
       const previous = await readStoredInput(options.tasks, options.objects, input.taskId);
       const route = options.modelResolver ? await options.modelResolver.resolve({ role: "fact_extractor", complexity: "routine" }) : null;
+      const effectiveMaxOutputTokens = route?.maxOutputTokens ?? previous.maxOutputTokens;
+      if (input.maxTokens !== undefined && input.maxTokens > effectiveMaxOutputTokens) throw new Error(`请求输出预算 ${input.maxTokens} 超过当前 Provider/Workspace 有效上限 ${effectiveMaxOutputTokens}。`);
       const payload = toStoredInput({
         command: input.command,
         taskId: input.taskId,
@@ -95,9 +103,10 @@ export function createLocalFactExtractionService(options: CreateLocalFactExtract
         analysisUnitId: previous.analysisUnitId,
         baseURL: route?.baseURL ?? input.baseURL,
         model: route?.model ?? input.model,
+        ...(route?.protocol ? { protocol: route.protocol } : {}),
         ...(route?.providerProfileId ? { providerProfileId: route.providerProfileId } : {}),
-        ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
-      });
+        maxTokens: input.maxTokens ?? Math.min(previous.maxTokens, effectiveMaxOutputTokens),
+      }, effectiveMaxOutputTokens);
       const inputObject = await options.objects.put({ content: encoder.encode(JSON.stringify(payload)), mediaType: "application/vnd.ainovr.local-fact-extraction-input+json" });
       return options.commands.execute({
         ...input.command,
@@ -122,16 +131,17 @@ export function createLocalFactExtractionService(options: CreateLocalFactExtract
         const prompt = buildFactExtractionPrompt(unit.spans);
         const promptObject = await options.objects.put({ content: encoder.encode(JSON.stringify({ schema_version: 1, kind: "local_fact_extraction_prompt", taskId, analysisProjectId: input.analysisProjectId, analysisUnitId: input.analysisUnitId, prompt })), mediaType: "application/vnd.ainovr.local-fact-extraction-prompt+json" });
         await options.tasks.checkpoint(taskId, options.hostId, { schema_version: 1, stage: "calling_local_model", model: input.model, promptObjectHash: promptObject.sha256 }, null);
-        let completion = await options.caller.complete({ baseURL: input.baseURL, model: input.model, providerProfileId: input.providerProfileId, systemPrompt: factSystemPrompt(), prompt, maxTokens: input.maxTokens }, controller.signal);
+        let completion = await options.caller.complete({ baseURL: input.baseURL, model: input.model, providerProfileId: input.providerProfileId, protocol: input.protocol, systemPrompt: factSystemPrompt(), prompt, maxTokens: input.maxTokens }, controller.signal);
         let repairedForLength = false;
         if (completion.finishReason === "length") {
           repairedForLength = true;
-          const repairMaxTokens = Math.min(16_384, Math.max(input.maxTokens + 256, input.maxTokens * 4));
+          const repairMaxTokens = Math.min(input.maxOutputTokens, Math.max(input.maxTokens + 256, input.maxTokens * 4));
           await options.tasks.checkpoint(taskId, options.hostId, { schema_version: 1, stage: "repairing_truncated_local_output", model: input.model, maxTokens: repairMaxTokens }, null);
           completion = await options.caller.complete({
             baseURL: input.baseURL,
             model: input.model,
             providerProfileId: input.providerProfileId,
+            protocol: input.protocol,
             systemPrompt: factSystemPrompt(),
             prompt: `${prompt}\n\n上次输出预算不足而被截断。请在不丢失可核验事实的前提下，仅输出紧凑且符合 JSON Schema 的对象。`,
             maxTokens: repairMaxTokens,
@@ -146,6 +156,7 @@ export function createLocalFactExtractionService(options: CreateLocalFactExtract
             baseURL: input.baseURL,
             model: input.model,
             providerProfileId: input.providerProfileId,
+            protocol: input.protocol,
             systemPrompt: factSystemPrompt(),
             prompt: `${prompt}\n\n上次输出未通过严格校验：${parsed.message}\n请仅重新输出一个符合 JSON Schema 的对象。`,
             maxTokens: input.maxTokens,
@@ -221,7 +232,9 @@ interface StoredInput {
   baseURL: string;
   model: string;
   providerProfileId?: string;
+  protocol?: ModelWireProtocol;
   maxTokens: number;
+  maxOutputTokens: number;
 }
 
 interface UnitSpan {
@@ -229,13 +242,13 @@ interface UnitSpan {
   text: string;
 }
 
-function toStoredInput(input: StartLocalFactExtractionInput): StoredInput {
+function toStoredInput(input: StartLocalFactExtractionInput, maxOutputTokens = 16_384): StoredInput {
   for (const [key, value] of [["taskId", input.taskId], ["analysisProjectId", input.analysisProjectId], ["analysisUnitId", input.analysisUnitId], ["baseURL", input.baseURL], ["model", input.model]] as const) {
     if (!value.trim()) throw new Error(`${key} 必须是非空字符串。`);
   }
   const maxTokens = input.maxTokens ?? 4096;
-  if (!Number.isInteger(maxTokens) || maxTokens < 256 || maxTokens > 16_384) throw new Error("maxTokens 必须介于 256 和 16384。 ");
-  return { schema_version: 1, taskId: input.taskId, analysisProjectId: input.analysisProjectId, analysisUnitId: input.analysisUnitId, baseURL: input.baseURL, model: input.model, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}), maxTokens };
+  if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 256 || maxOutputTokens > 16_384 || !Number.isInteger(maxTokens) || maxTokens < 256 || maxTokens > maxOutputTokens) throw new Error(`maxTokens 必须介于 256 和 ${maxOutputTokens}。 `);
+  return { schema_version: 1, taskId: input.taskId, analysisProjectId: input.analysisProjectId, analysisUnitId: input.analysisUnitId, baseURL: input.baseURL, model: input.model, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}), ...(input.protocol ? { protocol: input.protocol } : {}), maxTokens, maxOutputTokens };
 }
 
 async function readStoredInput(tasks: TaskRunner, objects: ObjectStore, taskId: string): Promise<StoredInput> {
@@ -244,7 +257,7 @@ async function readStoredInput(tasks: TaskRunner, objects: ObjectStore, taskId: 
   const parsed: unknown = JSON.parse(decoder.decode(await objects.read(inputHash)));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("本地 FactExtractor 任务输入无效。");
   const record = parsed as Record<string, unknown>;
-  if (record.schema_version !== 1 || ["taskId", "analysisProjectId", "analysisUnitId", "baseURL", "model"].some((key) => typeof record[key] !== "string" || !(record[key] as string).trim()) || (record.providerProfileId !== undefined && (typeof record.providerProfileId !== "string" || !record.providerProfileId.trim())) || !Number.isInteger(record.maxTokens)) throw new Error("本地 FactExtractor 任务输入无效。");
+  if (record.schema_version !== 1 || ["taskId", "analysisProjectId", "analysisUnitId", "baseURL", "model"].some((key) => typeof record[key] !== "string" || !(record[key] as string).trim()) || (record.providerProfileId !== undefined && (typeof record.providerProfileId !== "string" || !record.providerProfileId.trim())) || (record.protocol !== undefined && record.protocol !== "chat_completions" && record.protocol !== "responses" && record.protocol !== "ollama_native") || !Number.isInteger(record.maxTokens) || !Number.isInteger(record.maxOutputTokens) || Number(record.maxOutputTokens) < 256 || Number(record.maxOutputTokens) > 16_384 || Number(record.maxTokens) < 256 || Number(record.maxTokens) > Number(record.maxOutputTokens)) throw new Error("本地 FactExtractor 任务输入无效。");
   return record as unknown as StoredInput;
 }
 

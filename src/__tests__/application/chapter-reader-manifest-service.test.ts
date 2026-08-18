@@ -36,7 +36,7 @@ describe("ChapterReaderManifest Application Service", () => {
     await saveDocument(application, "untrusted_reference_copy", "other:reference", { title: "禁泄漏参考名", source: "禁泄漏来源" });
     await driver.execute({ sql: "INSERT INTO reader_states (reader_state_id, project_id, chapter_id, payload_json, revision, created_at) VALUES (?, ?, NULL, ?, 1, ?)", params: ["state_before", "project_001", JSON.stringify({ schema_version: 1, expectation: "门后的代价" }), 1_700_000_000_000] });
     await driver.execute({ sql: "INSERT INTO reader_promises (reader_promise_id, project_id, chapter_id, payload_json, status, revision, created_at, updated_at) VALUES (?, ?, NULL, ?, 'delay', 1, ?, ?)", params: ["promise_before", "project_001", JSON.stringify({ schema_version: 1, promise: "谁写下了信" }), 1_700_000_000_000, 1_700_000_000_000] });
-    const drafts = { getDraft: async (): Promise<ChapterReaderDraft> => ({ documentId: "production:chapter_draft:chapter_002:v1", projectId: "project_001", chapterId: "chapter_002", manifestId: "writer_manifest_002", title: "第二章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", taskId: "writer_task_002", revision: "v1" }) };
+    const drafts = { getDraft: async (): Promise<ChapterReaderDraft> => ({ documentId: "production:chapter_draft:chapter_002:v1", projectId: "project_001", chapterId: "chapter_002", manifestId: "writer_manifest_002", title: "第二章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", executionRef: "writer_task_002", revision: "v1" }) };
     const manifests = createChapterReaderManifestService({ driver, commands: application.commands, objects, drafts });
 
     for (const readerKind of ["immersive", "low_patience", "logic_sensitive"] as const) {

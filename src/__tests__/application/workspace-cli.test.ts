@@ -20,6 +20,7 @@ import { createStoryPlanningService } from "@/application/story-planning-service
 import { createCreativeRecipeService } from "@/application/creative-recipe-service";
 import type { ChapterReviewerService } from "@/application/chapter-reviewer-service";
 import type { ChapterEditorTaskService } from "@/application/chapter-editor-task-service";
+import type { MechanismEffectExperimentBlindReviewService } from "@/application/mechanism-effect-experiment-blind-review-service";
 import { createTaskRunner } from "@/application/task-runner";
 import { createWorkspaceMaintenanceService } from "@/application/workspace-maintenance-service";
 import { createWorkspaceApplicationService, type WorkspaceApplicationService } from "@/application/workspace-application-service";
@@ -133,7 +134,7 @@ describe("Workspace CLI", () => {
   });
 
   it("CLI 将可恢复批量事实抽取交给领域服务，而不接受 SQL 或路径参数", async () => {
-    const application = {} as WorkspaceApplicationService;
+    const application = { queries: { getWorkspaceSettings: async () => ({ automationMode: "supervised" }) } } as WorkspaceApplicationService;
     const calls: string[] = [];
     const batch = {
       start: async (input: { taskId: string; analysisProjectId: string; model: string }) => {
@@ -192,6 +193,54 @@ describe("Workspace CLI", () => {
       task: { status: "succeeded" },
       draft: { documentId: "draft_001", text: "钟声越过空街。" },
     });
+  });
+
+  it("CLI 只通过匿名盲评领域服务启动、恢复和读取 P6 报告", async () => {
+    const calls: string[] = [];
+    const application = { queries: { getWorkspaceSettings: async () => ({ automationMode: "supervised" }) } } as WorkspaceApplicationService;
+    const blindReview: MechanismEffectExperimentBlindReviewService = {
+      start: async (input) => {
+        calls.push(`start:${input.experimentId}:${input.pairId}:${input.sourceManifestId}:${input.documentId}`);
+        return { kind: "accepted", taskId: input.taskId };
+      },
+      run: async (taskId) => {
+        calls.push(`run:${taskId}`);
+        return { taskId, status: "succeeded" } as never;
+      },
+      cancel: async () => undefined,
+      getTask: async (taskId) => ({ taskId, status: "succeeded" } as never),
+      getReport: async ({ documentId }) => ({ schema_version: 1, kind: "mechanism_effect_experiment_blind_review", experimentId: "experiment_001", pairId: "pair_001", structuredTargetEffect: "candidate_002", candidateRisks: [], sourceLeakageCandidateIds: [], documentId } as never),
+    };
+
+    await expect(executeWorkspaceCli(application, "start-mechanism-effect-experiment-blind-review", {
+      commandId: "blind_review_start", idempotencyKey: "blind_review_start", correlationId: "blind_review_start",
+      projectId: "project_001", experimentId: "experiment_001", pairId: "pair_001", sourceManifestId: "manifest_001", taskId: "blind_review_task_001", documentId: "blind_review_001", title: "匿名盲评",
+    }, { mechanismEffectBlindReview: blindReview })).resolves.toEqual({ kind: "accepted", taskId: "blind_review_task_001" });
+    await expect(executeWorkspaceCli(application, "resume-mechanism-effect-experiment-blind-review", { taskId: "blind_review_task_001" }, { mechanismEffectBlindReview: blindReview }))
+      .resolves.toMatchObject({ taskId: "blind_review_task_001", status: "succeeded" });
+    await expect(executeWorkspaceCli(application, "get-mechanism-effect-experiment-blind-review", { documentId: "blind_review_001" }, { mechanismEffectBlindReview: blindReview }))
+      .resolves.toMatchObject({ kind: "mechanism_effect_experiment_blind_review", pairId: "pair_001" });
+    expect(calls).toEqual([
+      "start:experiment_001:pair_001:manifest_001:blind_review_001",
+      "run:blind_review_task_001",
+      "run:blind_review_task_001",
+    ]);
+  });
+
+  it("CLI 在 manual 模式只排队新任务，显式 resume 才执行", async () => {
+    const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    await executeWorkspaceCli(application, "create-novel-project", { commandId: "manual_project", idempotencyKey: "manual_project", correlationId: "manual", projectId: "project_manual", title: "手动模式", status: "planning", payload: { schema_version: 1 } });
+    await executeWorkspaceCli(application, "save-workspace-settings", { commandId: "manual_settings", idempotencyKey: "manual_settings", correlationId: "manual", automationMode: "manual", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, cloudEscalation: "never" });
+    const creation = createLocalCreationService({
+      driver, schemas, commands: application.commands, tasks: createTaskRunner(driver, { now: () => 1_700_000_000_000 }), objects: await createNodeObjectStore({ workspacePath }),
+      caller: { complete: async () => ({ text: "钟声越过空街。", finishReason: "stop" }) }, hostId: "cli-manual", now: () => 1_700_000_000_000,
+    });
+    await expect(executeWorkspaceCli(application, "create-local-draft", {
+      commandId: "manual_draft", idempotencyKey: "manual_draft", correlationId: "manual", taskId: "task_manual", documentId: "draft_manual", projectId: "project_manual", title: "第一章", prompt: "写原创开场。",
+    }, { creation })).resolves.toMatchObject({ command: { kind: "accepted", taskId: "task_manual" }, task: { status: "queued" }, draft: null });
+    await expect(executeWorkspaceCli(application, "resume-local-creation", { taskId: "task_manual" }, { creation })).resolves.toMatchObject({ status: "succeeded" });
+    await expect(creation.getDraft("draft_manual")).resolves.toMatchObject({ text: "钟声越过空街。" });
   });
 
   it("CLI 通过受控任务创建备份，并在确认后恢复到新目录", async () => {
@@ -257,13 +306,15 @@ describe("Workspace CLI", () => {
       run: async () => ({ taskId: "editor_task_001", status: "succeeded" } as never),
       cancel: async () => undefined,
       getTask: async () => ({ taskId: "editor_task_001", status: "succeeded" } as never),
-      getDraft: async () => ({ documentId: "production:chapter_draft:chapter_001:v2", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V2", text: "修订正文", model: "qwen3.5:9b", taskId: "editor_task_001", revision: "v2", parentDocumentId: "production:chapter_draft:chapter_001:v1", parentRevision: "v1", reviewId: "review_001", selectedIssueIds: ["issue_001"], rationale: "修订", changedRange: { sourceStartByte: 0, sourceEndByte: 3, replacementByteLength: 6 } }),
+      getDraft: async () => ({ documentId: "production:chapter_draft:chapter_001:v2", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V2", text: "修订正文", model: "qwen3.5:9b", executionRef: "editor_task_001", revision: "v2", parentDocumentId: "production:chapter_draft:chapter_001:v1", parentRevision: "v1", reviewId: "review_001", selectedIssueIds: ["issue_001"], rationale: "修订", changedRange: { sourceStartByte: 0, sourceEndByte: 3, replacementByteLength: 6 } }),
     };
 
     await expect(executeWorkspaceCli(application, "create-chapter-editor", {
       commandId: "command_editor_001", idempotencyKey: "idem_editor_001", correlationId: "correlation_editor_001", taskId: "editor_task_001", projectId: "project_001", chapterId: "chapter_001", title: "第一章 V2",
       targetDocumentId: "production:chapter_draft:chapter_001:v2", sourceDraftDocumentId: "production:chapter_draft:chapter_001:v1", reviewId: "review_001", selectedIssueIds: ["issue_001"], rationale: "只修正局部问题。", baseURL: "http://localhost:11434/v1", model: "qwen3.5:9b", maxTokens: 1024,
     }, { editorTasks })).resolves.toMatchObject({ task: { status: "succeeded" }, draft: { revision: "v2", reviewId: "review_001" } });
+    await expect(executeWorkspaceCli(application, "resume-chapter-editor", { taskId: "editor_task_001" }, { editorTasks }))
+      .resolves.toMatchObject({ taskId: "editor_task_001", status: "succeeded" });
   });
 
   it("CLI 通过 StoryPlanning Application Service 保存并读取项目规划", async () => {
@@ -287,9 +338,11 @@ describe("Workspace CLI", () => {
       schemaVersion: 1, commandId: "command_cli_pending_contract", idempotencyKey: "idem_cli_pending_contract", correlationId: "correlation_planning", actor: { kind: "external_agent", id: "test" }, projectId: "project_planning", createdAt: 1_700_000_000_000,
       tool: "commit_project_planning_document", args: { projectId: "project_planning", documentId: "planning:story_contract", documentType: "story_contract", status: "pending_review", expectedRevision: null, payload: { schema_version: 1, kind: "story_contract", title: "候选契约", corePromise: "承诺", centralConflict: "冲突", endingDirection: "结局", immutableBoundaries: ["边界"] } },
     });
-    await expect(executeWorkspaceCli(application, "review-project-planning-document", {
+    const pendingReview = await executeWorkspaceCli(application, "review-project-planning-document", {
       commandId: "command_cli_review_contract", idempotencyKey: "idem_cli_review_contract", correlationId: "correlation_planning", projectId: "project_planning", documentId: "planning:story_contract", expectedRevision: 1, status: "approved",
-    }, { planning })).resolves.toMatchObject({ kind: "ok", revision: 2 });
+    }, { planning });
+    expect(pendingReview).toMatchObject({ kind: "needs_confirmation" });
+    await expect(application.commands.approveConfirmation({ confirmationId: (pendingReview as { confirmationId: string }).confirmationId, actor: { kind: "human_via_agent", id: "test" }, reason: "测试批准规划" })).resolves.toMatchObject({ kind: "ok", revision: 2 });
   });
 
   it("CLI 通过同一 Application Service 创建并读取本章 CreativeRecipe", async () => {
@@ -303,13 +356,13 @@ describe("Workspace CLI", () => {
       schemaVersion: 1, commandId: "command_recipe_contract", idempotencyKey: "idem_recipe_contract", correlationId: "correlation_recipe", actor: { kind: "human", id: "user_001" }, projectId: "project_recipe", createdAt: 1_700_000_000_000,
       tool: "commit_project_planning_document", args: { projectId: "project_recipe", documentId: "planning:chapter_contract:chapter_001", documentType: "chapter_contract", status: "approved", expectedRevision: null, payload: { schema_version: 1, kind: "chapter_contract", chapterId: "chapter_001", ordinal: 1, entryState: ["入口"], exitState: ["出口"], desire: "目标", pressure: "压力", turningPoint: "转折", mustNotHappen: [], readerPromiseAction: "establish", emotionalCycle: "变化", nextChapterInterface: ["接口"], mechanismCardIds: [] } },
     });
-    const recipes = createCreativeRecipeService({ driver, commands: application.commands, mechanisms: { listAdopted: async () => [] } });
+    const recipes = createCreativeRecipeService({ driver, commands: application.commands, mechanisms: { listAdoptedSnapshots: async () => [] }, applications: { get: async () => null } });
 
     await expect(executeWorkspaceCli(application, "create-creative-recipe", {
       commandId: "command_recipe_create", idempotencyKey: "idem_recipe_create", correlationId: "correlation_recipe", projectId: "project_recipe", chapterId: "chapter_001",
     }, { recipes })).resolves.toMatchObject({ kind: "ok", revision: 1 });
     await expect(executeWorkspaceCli(application, "get-creative-recipe", { projectId: "project_recipe", chapterId: "chapter_001" }, { recipes }))
-      .resolves.toMatchObject({ chapterId: "chapter_001", mechanismCardIds: [] });
+      .resolves.toMatchObject({ chapterId: "chapter_001", mechanismAssetId: null });
   });
 
   it("CLI 与 MCP 使用相同参考文本导入服务，不暴露路径读取", async () => {
@@ -323,7 +376,7 @@ describe("Workspace CLI", () => {
     const maps = createStructuralReadingMapService({ driver, commands: application.commands, objects, now: () => 1_700_000_000_000 });
     const factExtraction = createLocalFactExtractionService({
       driver, commands: application.commands, tasks: createTaskRunner(driver, { now: () => 1_700_000_000_000 }), objects, facts,
-      caller: { complete: async () => ({ text: JSON.stringify({ facts: [{ id: "fact_001", kind: "event", rawLabel: null, statement: "出现中文原文", subject: null, object: null, evidenceSpanIds: ["sp00001"], epistemicStatus: "observed" }] }), finishReason: "stop" }) },
+      caller: { complete: async () => ({ text: JSON.stringify({ facts: [{ id: "fact_001", kind: "event", rawLabel: null, statement: "出现中文原文", subject: null, object: null, evidenceSpanIds: ["segmentation_001:sp00001"], epistemicStatus: "observed" }] }), finishReason: "stop" }) },
       hostId: "cli-fact-test", now: () => 1_700_000_000_000,
     });
     const threads = createThreadGraphService({ driver, commands: application.commands, objects, now: () => 1_700_000_000_000 });
@@ -360,10 +413,10 @@ describe("Workspace CLI", () => {
     await expect(executeWorkspaceCli(application, "resume-local-fact-extraction", { taskId: "fact_task_001" }, { factExtraction }))
       .resolves.toMatchObject({ status: "succeeded" });
     await expect(executeWorkspaceCli(application, "get-fact-ledger", { analysisProjectId: "analysis_001", analysisUnitId: unitId }, { facts }))
-      .resolves.toEqual([expect.objectContaining({ id: "fact_001", evidenceSpanIds: ["sp00001"] })]);
+      .resolves.toEqual([expect.objectContaining({ id: "fact_001", evidenceSpanIds: ["segmentation_001:sp00001"] })]);
     await expect(executeWorkspaceCli(application, "submit-thread-graph", {
       commandId: "command_thread_001", idempotencyKey: "idem_thread_001", correlationId: "correlation_thread_001", analysisProjectId: "analysis_001",
-      rawOutput: JSON.stringify({ threads: [{ id: "thread_001", kind: "event", title: "原文事件", episodes: [{ id: "episode_001", role: "setup", rawLabel: null, summary: "原文事件出现", evidenceSpanIds: ["sp00001"], ordinal: 1 }], epistemicStatus: "observed", lifecycle: "open" }] }),
+      rawOutput: JSON.stringify({ threads: [{ id: "thread_001", kind: "event", title: "原文事件", episodes: [{ id: "episode_001", role: "setup", rawLabel: null, summary: "原文事件出现", evidenceSpanIds: ["segmentation_001:sp00001"], ordinal: 1 }], epistemicStatus: "observed", lifecycle: "open" }] }),
     }, { threads })).resolves.toMatchObject({ kind: "ok" });
     await expect(executeWorkspaceCli(application, "get-thread-graph", { analysisProjectId: "analysis_001" }, { threads }))
       .resolves.toEqual([expect.objectContaining({ id: "thread_001" })]);
@@ -376,7 +429,7 @@ describe("Workspace CLI", () => {
     }, { brief })).resolves.toMatchObject({ kind: "ok" });
     await expect(executeWorkspaceCli(application, "get-analysis-brief", { analysisProjectId: "analysis_001" }, { brief }))
       .resolves.toMatchObject({ status: "approved" });
-    const conclusionOutput = JSON.stringify({ conclusions: [{ id: "conclusion_001", researchQuestionId: "question_001", conclusion: "异常先出现能建立期待。", observations: [{ id: "observation_001", statement: "异常班次先于解释出现。", evidenceSpanIds: ["sp00001"] }], evidenceSpanIds: ["sp00001"], counterEvidenceSpanIds: [], alternativeExplanations: ["局部场景调度"], applicabilityBoundaries: ["信息控制释放"], productionImplications: ["先给异常再延后解释。"], coverageStatus: "complete", epistemicStatus: "inferred" }] });
+    const conclusionOutput = JSON.stringify({ conclusions: [{ id: "conclusion_001", researchQuestionId: "question_001", conclusion: "异常先出现能建立期待。", observations: [{ id: "observation_001", statement: "异常班次先于解释出现。", evidenceSpanIds: ["segmentation_001:sp00001"] }], evidenceSpanIds: ["segmentation_001:sp00001"], counterEvidenceSpanIds: [], alternativeExplanations: ["局部场景调度"], applicabilityBoundaries: ["信息控制释放"], productionImplications: ["先给异常再延后解释。"], coverageStatus: "complete", epistemicStatus: "inferred" }] });
     await expect(executeWorkspaceCli(application, "submit-research-conclusions", {
       commandId: "command_conclusion_001", idempotencyKey: "idem_conclusion_001", correlationId: "correlation_conclusion_001", analysisProjectId: "analysis_001", researchQuestionId: "question_001", rawOutput: conclusionOutput,
     }, { conclusions })).resolves.toMatchObject({ kind: "ok" });
@@ -384,7 +437,7 @@ describe("Workspace CLI", () => {
       .resolves.toEqual([expect.objectContaining({ id: "conclusion_001" })]);
     await expect(executeWorkspaceCli(application, "get-falsification-work-item", { analysisProjectId: "analysis_001", conclusionId: "conclusion_001" }, { falsification }))
       .resolves.toMatchObject({ proposition: "异常先出现能建立期待。" });
-    const falsificationOutput = JSON.stringify({ assessment: { conclusionId: "conclusion_001", status: "bounded", counterEvidenceSpanIds: ["sp00001"], alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["单一计算单元"], sampleBiasNotes: ["样本有限"] } });
+    const falsificationOutput = JSON.stringify({ assessment: { conclusionId: "conclusion_001", status: "bounded", counterEvidenceSpanIds: ["segmentation_001:sp00001"], alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["单一计算单元"], sampleBiasNotes: ["样本有限"] } });
     await expect(executeWorkspaceCli(application, "submit-independent-falsification", {
       commandId: "command_falsification_001", idempotencyKey: "idem_falsification_001", correlationId: "correlation_falsification_001", analysisProjectId: "analysis_001", conclusionId: "conclusion_001", rawOutput: falsificationOutput,
     }, { falsification })).resolves.toMatchObject({ kind: "ok" });

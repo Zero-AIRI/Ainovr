@@ -38,6 +38,13 @@ describe("结构化 ReadingMap 服务", () => {
       command: command("corpus_001"), analysisProjectId: "analysis_001", segmentationId: "segmentation_001", sourceEditionId: "edition_001", boundary: "complete",
       budget: { contextWindowTokens: 4096, safetyMarginRatio: 0.2, reservedOutputTokens: 512, renderedSystemPromptTokens: 64, renderedSchemaTokens: 64, envelopeTokens: 64 },
     });
+    const source = await driver.query<{ normalized_object_hash: string }>({ sql: "SELECT normalized_object_hash FROM source_editions WHERE source_edition_id = ?", params: ["edition_001"] });
+    const prefixBytes = new TextEncoder().encode("第一章\n门后有脚步声。");
+    await corpus.prepare({
+      command: command("corpus_002"), analysisProjectId: "analysis_002", segmentationId: "segmentation_002", sourceEditionId: "edition_001", boundary: "fragment",
+      byteRange: { startByte: 0, endByte: prefixBytes.byteLength },
+      budget: { contextWindowTokens: 4096, safetyMarginRatio: 0.2, reservedOutputTokens: 512, renderedSystemPromptTokens: 64, renderedSchemaTokens: 64, envelopeTokens: 64 },
+    });
     const maps = createStructuralReadingMapService({ driver, commands: application.commands, objects, now: () => 1_700_000_000_000 });
 
     await expect(maps.create({ command: command("reading_map_001"), analysisProjectId: "analysis_001" })).resolves.toMatchObject({ kind: "ok" });
@@ -49,6 +56,7 @@ describe("结构化 ReadingMap 服务", () => {
       .resolves.toEqual([{ status: "complete", reason: "structural_reading_map" }]);
     await expect(driver.query<{ payload_json: string }>({ sql: "SELECT payload_json FROM analysis_items WHERE analysis_project_id = ?", params: ["analysis_001"] }))
       .resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ payload_json: expect.stringContaining("门后有脚步声") })]));
+    expect(source[0]?.normalized_object_hash).toEqual(expect.any(String));
   });
 });
 

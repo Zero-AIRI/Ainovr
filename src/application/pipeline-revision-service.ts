@@ -2,7 +2,8 @@ import type { CommandEnvelope, CommandResult } from "@/application/command-types
 import type { CommandService } from "@/application/command-service";
 import type { SqlDriver } from "@/persistence/sql-driver";
 
-export interface PipelineStep { id: string; tool: string; enabled: boolean; config?: Record<string, unknown>; }
+export type PipelineStepExecution = "executable" | "agent_action" | "human_review";
+export interface PipelineStep { id: string; tool: string; enabled: boolean; execution: PipelineStepExecution; dependsOn: string[]; config?: Record<string, unknown>; }
 export interface PipelineRevision { pipelineId: string; name: string; status: string; revision: number; steps: PipelineStep[]; }
 
 const FORBIDDEN_TOOLS = new Set(["apply_batch", "sql_query", "sql_execute", "sql_transaction", "read_data_file", "write_data_file"]);
@@ -20,16 +21,17 @@ export const PIPELINE_DOMAIN_TOOLS = new Set([
 ]);
 
 export interface PipelineRevisionService {
-  save(input: { command: Omit<CommandEnvelope, "tool" | "args">; pipelineId: string; name: string; steps: PipelineStep[]; status?: string; expectedRevision?: number | null }): Promise<CommandResult>;
+  save(input: { command: Omit<CommandEnvelope, "tool" | "args">; pipelineId: string; name: string; steps: Array<Omit<PipelineStep, "execution" | "dependsOn"> & Partial<Pick<PipelineStep, "execution" | "dependsOn">>>; status?: string; expectedRevision?: number | null }): Promise<CommandResult>;
   list(): Promise<PipelineRevision[]>;
 }
 
 export function createPipelineRevisionService(options: { driver: SqlDriver; commands: CommandService }): PipelineRevisionService {
   return {
     async save(input) {
-      validate(input.pipelineId, input.name, input.steps);
+      const steps = normalizeSteps(input.steps);
+      validate(input.pipelineId, input.name, steps);
       return options.commands.execute({ ...input.command, tool: "commit_pipeline_revision", args: {
-        pipelineId: input.pipelineId, name: input.name, status: input.status ?? "draft", steps: input.steps, expectedRevision: input.expectedRevision ?? null,
+        pipelineId: input.pipelineId, name: input.name, status: input.status ?? "draft", steps, expectedRevision: input.expectedRevision ?? null,
       } });
     },
     async list() {
@@ -39,7 +41,7 @@ export function createPipelineRevisionService(options: { driver: SqlDriver; comm
       });
       return rows.map((row) => {
         const payload = JSON.parse(row.payload_json) as { steps?: PipelineStep[] };
-        return { pipelineId: row.pipeline_id, name: row.name, status: row.status, revision: row.current_revision, steps: payload.steps ?? [] };
+        return { pipelineId: row.pipeline_id, name: row.name, status: row.status, revision: row.current_revision, steps: (payload.steps ?? []).map(normalizeStep) };
       });
     },
   };
@@ -49,11 +51,43 @@ function validate(pipelineId: string, name: string, steps: PipelineStep[]): void
   if (!pipelineId.trim() || !name.trim() || !Array.isArray(steps) || steps.length === 0 || steps.length > 32) throw new Error("PipelineRevision 的 ID、名称和步骤非法。 ");
   const ids = new Set<string>();
   for (const step of steps) {
-    if (!step || !step.id.trim() || !step.tool.trim() || ids.has(step.id) || FORBIDDEN_TOOLS.has(step.tool) || !PIPELINE_DOMAIN_TOOLS.has(step.tool)) throw new Error("PipelineRevision 包含非法、未登记或越权步骤。 ");
+    if (!step || !step.id.trim() || !step.tool.trim() || !step.execution || ids.has(step.id) || FORBIDDEN_TOOLS.has(step.tool) || !PIPELINE_DOMAIN_TOOLS.has(step.tool)) throw new Error("PipelineRevision 包含非法、未登记或越权步骤。 ");
     assertNoSecret(step.config);
     assertSafeConfig(step.tool, step.config);
     ids.add(step.id);
   }
+  for (const step of steps) {
+    if (new Set(step.dependsOn).size !== step.dependsOn.length || step.dependsOn.includes(step.id) || step.dependsOn.some((dependency) => !ids.has(dependency))) throw new Error("PipelineRevision 包含不存在、重复或自依赖的步骤依赖。");
+  }
+  assertAcyclic(steps);
+}
+
+function normalizeSteps(steps: Array<Omit<PipelineStep, "execution" | "dependsOn"> & Partial<Pick<PipelineStep, "execution" | "dependsOn">>>): PipelineStep[] {
+  return steps.map(normalizeStep);
+}
+
+function normalizeStep(step: Omit<PipelineStep, "execution" | "dependsOn"> & Partial<Pick<PipelineStep, "execution" | "dependsOn">>): PipelineStep {
+  if (!step || typeof step !== "object") throw new Error("Pipeline 步骤必须是对象。 ");
+  if (step.execution !== undefined && step.execution !== "executable" && step.execution !== "agent_action" && step.execution !== "human_review") throw new Error("Pipeline 步骤 execution 非法。 ");
+  const execution = step.execution ?? (EXECUTABLE_CONFIGS[step.tool] ? "executable" : step.tool.startsWith("review_") || step.tool.startsWith("approve_") || step.tool === "commit_chapter_production" ? "human_review" : "agent_action");
+  const dependsOn = step.dependsOn === undefined ? [] : step.dependsOn;
+  if (!Array.isArray(dependsOn) || dependsOn.some((dependency) => typeof dependency !== "string" || !dependency.trim())) throw new Error("Pipeline 步骤依赖必须是非空 ID 数组。");
+  return { ...step, execution, dependsOn: [...dependsOn] } as PipelineStep;
+}
+
+function assertAcyclic(steps: PipelineStep[]): void {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new Error("PipelineRevision 存在循环依赖。");
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependency of byId.get(id)?.dependsOn ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  steps.forEach((step) => visit(step.id));
 }
 
 function assertNoSecret(value: unknown): void {

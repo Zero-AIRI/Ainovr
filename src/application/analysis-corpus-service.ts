@@ -8,6 +8,7 @@ import { sha256Hex } from "@/lib/sha256";
 import type { CorpusBoundary } from "@/lib/analysis/types";
 import type { ObjectStore } from "@/persistence/object-store";
 import type { SqlDriver } from "@/persistence/sql-driver";
+import type { ModelResolver } from "@/application/model-resolver";
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -53,6 +54,8 @@ export interface CreateAnalysisCorpusServiceOptions {
   driver: SqlDriver;
   commands: CommandService;
   objects: ObjectStore;
+  /** 若已组装路由，FactExtractor 的有效模型预算是唯一上限；调用方不能伪造更大的窗口。 */
+  modelResolver?: ModelResolver;
   now?: () => number;
 }
 
@@ -69,7 +72,8 @@ export function createAnalysisCorpusService(options: CreateAnalysisCorpusService
       const sourceBytes = await options.objects.read(source.normalizedObjectHash);
       const sourceSlice = sourceTextSlice(sourceBytes, input.byteRange);
       const text = sourceSlice.text;
-      const budget = calculateSourceInputBudget(input.budget);
+      const budgetInput = options.modelResolver ? await boundedBudget(options.modelResolver, input.budget) : input.budget;
+      const budget = calculateSourceInputBudget(budgetInput);
       const document = await createSourceDocument({ sourceId: source.sourceEditionId, title: source.title, text, boundary: input.boundary });
       if (!input.byteRange && document.sourceHash !== source.sourceHash) throw new Error("规范化 SourceEdition hash 校验失败。");
       const segmentation = buildHierarchicalSegmentation(document, {
@@ -96,7 +100,7 @@ export function createAnalysisCorpusService(options: CreateAnalysisCorpusService
         return {
           // 同一完整 SourceEdition 可被多个已确认的卷/片段 Corpus 引用；范围版必须把 span ID
           // 置于 segmentation 命名空间，避免覆盖已有分析版本的不可变证据记录。
-          spanId: input.byteRange ? `${input.segmentationId}:${span.id}` : span.id,
+          spanId: `${input.segmentationId}:${span.id}`,
           analysisUnitId,
           ...bytes,
           sourceHash: source.sourceHash,
@@ -126,12 +130,12 @@ export function createAnalysisCorpusService(options: CreateAnalysisCorpusService
             ...(input.byteRange ? { byteRange: { ...input.byteRange } } : {}),
             budget: {
               ...budget,
-              contextWindowTokens: input.budget.contextWindowTokens,
-              safetyMarginRatio: input.budget.safetyMarginRatio,
-              reservedOutputTokens: input.budget.reservedOutputTokens,
-              renderedSystemPromptTokens: input.budget.renderedSystemPromptTokens,
-              renderedSchemaTokens: input.budget.renderedSchemaTokens,
-              envelopeTokens: input.budget.envelopeTokens,
+              contextWindowTokens: budgetInput.contextWindowTokens,
+              safetyMarginRatio: budgetInput.safetyMarginRatio,
+              reservedOutputTokens: budgetInput.reservedOutputTokens,
+              renderedSystemPromptTokens: budgetInput.renderedSystemPromptTokens,
+              renderedSchemaTokens: budgetInput.renderedSchemaTokens,
+              envelopeTokens: budgetInput.envelopeTokens,
             },
             structure: segmentation.structure.map(({ id, level, parentId, title, spanIds }) => ({ id, level, ...(parentId ? { parentId } : {}), ...(title ? { title } : {}), spanIds })),
             computeUnits: segmentation.computeUnits.map((unit) => ({ id: unit.id, structuralLevel: unit.structuralLevel, primarySpanIds: unit.primarySpanIds, contextBeforeSpanIds: unit.contextBeforeSpanIds, contextAfterSpanIds: unit.contextAfterSpanIds, estimatedInputTokens: unit.estimatedInputTokens })),
@@ -155,7 +159,13 @@ export function createAnalysisCorpusService(options: CreateAnalysisCorpusService
       const payload = parseSegmentationPayload(project.payload_json);
       const [units, spans] = await Promise.all([
         options.driver.query<{ analysis_unit_id: string; ordinal: number; start_byte: number; end_byte: number }>({ sql: "SELECT analysis_unit_id, ordinal, start_byte, end_byte FROM analysis_units WHERE segmentation_id = ? ORDER BY ordinal ASC", params: [project.segmentation_id] }),
-        options.driver.query<{ count: number }>({ sql: "SELECT COUNT(*) AS count FROM source_spans WHERE source_edition_id = ?", params: [project.source_edition_id] }),
+        options.driver.query<{ count: number }>({
+          sql: `SELECT COUNT(*) AS count
+                FROM source_spans span
+                INNER JOIN analysis_units unit ON unit.analysis_unit_id = span.analysis_unit_id
+                WHERE unit.segmentation_id = ? AND span.source_edition_id = ?`,
+          params: [project.segmentation_id, project.source_edition_id],
+        }),
       ]);
       return {
         analysisProjectId: project.analysis_project_id,
@@ -255,6 +265,19 @@ function parseSegmentationPayload(value: string): { sourceInputBudgetTokens: num
   const budget = record.budget;
   if (!budget || typeof budget !== "object" || Array.isArray(budget) || !Number.isInteger((budget as Record<string, unknown>).sourceInputBudgetTokens)) throw new Error("AnalysisSegmentation payload 损坏。");
   return { sourceInputBudgetTokens: (budget as Record<string, number>).sourceInputBudgetTokens };
+}
+
+async function boundedBudget(modelResolver: ModelResolver, requested: SourceTokenBudgetInput): Promise<SourceTokenBudgetInput> {
+  const route = await modelResolver.resolve({ role: "fact_extractor", complexity: "routine" });
+  return {
+    contextWindowTokens: Math.min(requested.contextWindowTokens, route.contextWindowTokens),
+    safetyMarginRatio: Math.max(requested.safetyMarginRatio, route.safetyMarginRatio),
+    // 输出预留是模型真实最大输出的硬保留，调用方不能通过传 0 把输出空间挪给原文。
+    reservedOutputTokens: Math.max(requested.reservedOutputTokens, route.maxOutputTokens),
+    renderedSystemPromptTokens: requested.renderedSystemPromptTokens,
+    renderedSchemaTokens: requested.renderedSchemaTokens,
+    envelopeTokens: requested.envelopeTokens,
+  };
 }
 
 function parseRecord(value: string): Record<string, unknown> {

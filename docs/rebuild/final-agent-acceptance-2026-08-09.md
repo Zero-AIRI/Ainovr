@@ -14,13 +14,15 @@ Ainovr 负责 SQLite/ObjectStore、版本、证据、确认、任务恢复、审
 
 | 验收项 | 本次结果 |
 |---|---|
-| 默认回归 | `npm test`：63 个测试文件、245 项测试全部通过；真实 API 测试仍被默认排除。 |
+| 默认回归 | `npm test`：64 个测试文件、269 项测试全部通过；真实 API 测试仍被默认排除。 |
 | 静态与构建门 | `npm run typecheck`、`npm run lint`、`npm run build`、`npm run build:cli`、`npm run build:mcp` 全部通过。 |
-| 桌面发布物 | `npm run tauri build` 成功生成 `ainovr.exe`、MSI 与 NSIS 安装包。仅有既有的 `com.ainovr.app` 命名建议，不阻断构建。 |
-| MCP 边界 | 当前构建 companion 成功协商 `protocolVersion=2025-06-18`；`tools/list` 返回 105 个领域工具，包含 `get_workspace_status`、`start_chapter_editor`、`commit_chapter`、`get_accepted_chapter`，不含通用文件或 SQL 工具。 |
+| 桌面发布物 | 修复打包资源层级与 Node Windows verbatim path 后，`npm run tauri build` 成功生成 `ainovr.exe`、MSI 与 NSIS；6 项 Rust 测试通过。最新 release 主进程与内置 sidecar 均已启动，仅保留既有的 `com.ainovr.app` 命名建议。 |
+| MCP 边界 | 当前构建 companion 成功协商 `protocolVersion=2025-06-18`；`tools/list` 返回 114 个领域工具，包含 `get_workspace_status`、`start_chapter_editor`、`commit_chapter`、`get_accepted_chapter`，六个禁止的通用文件/SQL 工具为 0。 |
+
+> **2026-08-10 当前工作树更新。** 上表中的测试计数是本验收写入时的快照。当前工作树已在后续安全修复后复跑为 `64 files / 274 tests`，typecheck、lint、前端/CLI/MCP 构建、6 项 Rust 测试与 MSI/NSIS 打包均通过。该增量不改变本文件“原计划最终产品验收未通过”的结论。当前实施约束见 [已裁决执行基线](decision-execution-baseline-2026-08-10.md)，逐图证据见 [UI 视觉证据账本](ui-visual-evidence-2026-08-10.md)。
 | 发布物 Secret 检查 | 对 `dist/`、`dist-cli/`、`dist-mcp/`、Tauri bundle、`data/exports/`、`data/restores/` 的值模式检查为 0 命中；检查明确排除且未读取 `data/settings.json`。 |
 | 隔离 R7 工作区 | 当前构建 CLI 可读取 `data/r7-dstdyj-20260809`：workspace revision 与 change sequence 均为 93，项目数为 1。`project:r7-echo-station` 有 1 章已接受正文、正式提交、2 条 Canon、1 条 ReaderPromise，生产游标的下一章 ordinal 为 2。 |
-| 桌面视觉 | 既有 [R7 记录](r7-dstdyj-short-story-validation-2026-08-09.md) 中的只读桌面窗口捕获显示“作品 / 参考 / 待处理 / 设置”四入口及原创侧投影；该项始终标为 Agent 自动化视觉验收。 |
+| 桌面视觉 | 真实 Tauri + Roaming SQLite fixture 的 accessibility tree 已核对作品生产链、参考证据/`no_pattern`、待确认/任务/Coverage/规划审核，以及 Provider/Pipeline 设置；它证明结构、状态和控件存在。Windows Graphics Capture 仍以 `0x80004002` 失败，没有合格位图，因此排版、遮挡、颜色、截断与细粒度操作体验仍非完整视觉验收。 |
 
 R7 的真实本地模型闭环、确认与原子 `ProductionCommit` 的详细领域证据见
 [短篇闭环验证](r7-dstdyj-short-story-validation-2026-08-09.md)，发布与恢复验证见

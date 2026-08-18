@@ -104,8 +104,13 @@ export function createEvidenceWorkbenchService(options: CreateEvidenceWorkbenchS
       }
       const rows = await options.driver.query<RawCoverageRow>({
         sql: `SELECT coverage_entry_id, analysis_unit_id, module, status, reason, created_at
-              FROM coverage_entries
-              WHERE ${where.join(" AND ")}
+              FROM (
+                SELECT coverage_entry_id, analysis_unit_id, module, status, reason, created_at,
+                       ROW_NUMBER() OVER (PARTITION BY analysis_project_id, module, COALESCE(analysis_unit_id, '') ORDER BY created_at DESC, coverage_entry_id DESC) AS rn
+                FROM coverage_entries
+                WHERE ${where.join(" AND ")}
+              ) latest
+              WHERE rn = 1
               ORDER BY created_at ASC, coverage_entry_id ASC`,
         params,
       });

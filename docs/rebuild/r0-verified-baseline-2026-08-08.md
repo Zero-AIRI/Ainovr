@@ -7,7 +7,7 @@
 
 ## 外部备份与恢复演练
 
-已在工作区外的 `C:\Users\Zero\.codex\backups\ainovr-r0-verified-20260808-035842` 生成：
+已在工作区外的本地备份目录生成：
 
 - 全部 Git refs 的 bundle；
 - 已暂存和未暂存 tracked binary patch；

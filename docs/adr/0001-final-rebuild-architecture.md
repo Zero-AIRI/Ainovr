@@ -29,7 +29,7 @@ SQLite 只由 Node Application Service 宿主通过 `better-sqlite3` 访问。CL
 
 正文、原文、完整 Prompt、实际输入、模型原始输出和大型上下文进入 `data/objects/<sha256>` 内容寻址对象库。写入顺序为临时文件、Hash/长度校验、原子 rename、再由数据库事务提交引用。事务失败产生的孤儿对象暂时保留。
 
-API Key 仅存在于运行时 SecretStore；当前 Node CLI/MCP 只从启动进程的环境变量读取。它不进入 SQLite、对象库、导出、日志、审计或 Agent 上下文。不得重新引入 `data/settings.json`。MCP 不提供 SQL、数据库文件或任意工作区文件读写工具；导入/导出均受固定路径与确认策略限制。
+API Key 只存在于受控运行时的 SecretStore（当前 Node CLI/MCP 实现从进程环境读取），不进入 SQLite、对象库、导出、日志、审计或 Agent 上下文。不得重新引入 `data/settings.json`。MCP 不提供 SQL、数据库文件、Secret 或任意工作区文件读写工具；导入/导出均受固定路径与确认策略限制。桌面 UI 不录入或回显密钥。
 
 ### 4. 分析—生产边界
 

@@ -42,7 +42,7 @@ describe("StoryPlanning Application Service", () => {
     await expect(planning.saveStorySystem({ command: command("system"), projectId: "project_001", system: { worldRules: ["钟楼每次只倒走七分钟"], characterSystem: ["林霁只能依据可见证据行动"], causalityRules: ["每个异常都要留下代价"], informationRules: ["解释不得先于异常"] } })).resolves.toMatchObject({ kind: "ok" });
     await expect(planning.saveBookOutline({ command: command("outline"), projectId: "project_001", outline: { acts: [{ id: "act_1", purpose: "建立异常与选择", chapterRange: [1, 4] }], endingDependencies: ["钟楼的规则必须先被验证"] } })).resolves.toMatchObject({ kind: "ok" });
     await expect(planning.saveStagePlan({ command: command("stage"), projectId: "project_001", stage: { stageId: "stage_001", objective: "确认第一封信的来源", chapterIds: ["chapter_001", "chapter_002"], entryCondition: "林霁只掌握异常线索", exitCondition: "林霁确定钟楼与失踪相关", readerExpectation: "信件会揭开失踪代价" } })).resolves.toMatchObject({ kind: "ok" });
-    await expect(planning.saveChapterContract({ command: command("chapter"), projectId: "project_001", contract: { chapterId: "chapter_001", ordinal: 1, entryState: ["林霁不知道失踪者去向"], exitState: ["林霁决定进入钟楼"], desire: "确认信件来源", pressure: "潮水将淹没入口", turningPoint: "指针开始倒转", mustNotHappen: ["不揭示全部真相"], readerPromiseAction: "establish", emotionalCycle: "由迟疑转为承担", nextChapterInterface: ["钟楼内部的第一条线索"], mechanismCardIds: [] } })).resolves.toMatchObject({ kind: "ok" });
+    await expect(planning.saveChapterContract({ command: command("chapter"), projectId: "project_001", contract: { chapterId: "chapter_001", ordinal: 1, entryState: ["林霁不知道失踪者去向"], exitState: ["林霁决定进入钟楼"], desire: "确认信件来源", pressure: "潮水将淹没入口", turningPoint: "指针开始倒转", mustNotHappen: ["不揭示全部真相"], readerPromiseAction: "establish", emotionalCycle: "由迟疑转为承担", nextChapterInterface: ["钟楼内部的第一条线索"] } })).resolves.toMatchObject({ kind: "ok" });
 
     await expect(planning.listDocuments("project_001")).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ documentType: "project_intent", revision: 1 }),
@@ -86,13 +86,13 @@ describe("StoryPlanning Application Service", () => {
       .resolves.toMatchObject({ kind: "ok", revision: 2 });
   });
 
-  it("没有人工选择概念时拒绝保存 StoryContract，章节契约最多激活三张 Writer 机制", async () => {
+  it("没有人工选择概念时拒绝保存 StoryContract，章节契约拒绝旧方法卡字段", async () => {
     const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
     const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
     await application.commands.execute({ ...command("project_2"), tool: "create_novel_project", args: { projectId: "project_002", title: "测试", status: "planning", payload: { schema_version: 1 } } });
     const planning = createStoryPlanningService({ driver, commands: application.commands, objects: await createNodeObjectStore({ workspacePath }) });
     await expect(planning.saveStoryContract({ command: command("contract_2"), projectId: "project_002", contract: { corePromise: "承诺", centralConflict: "冲突", endingDirection: "结局", immutableBoundaries: ["边界"] } })).rejects.toThrow(/选择/);
-    await expect(planning.saveChapterContract({ command: command("chapter_2"), projectId: "project_002", contract: { chapterId: "chapter_002", ordinal: 1, entryState: ["进入"], exitState: ["退出"], desire: "欲望", pressure: "压力", turningPoint: "转折", mustNotHappen: [], readerPromiseAction: "establish", emotionalCycle: "变化", nextChapterInterface: ["接口"], mechanismCardIds: ["a", "b", "c", "d"] } })).rejects.toThrow(/三张/);
+    await expect(planning.saveChapterContract({ command: command("chapter_2"), projectId: "project_002", contract: { chapterId: "chapter_002", ordinal: 1, entryState: ["进入"], exitState: ["退出"], desire: "欲望", pressure: "压力", turningPoint: "转折", mustNotHappen: [], readerPromiseAction: "establish", emotionalCycle: "变化", nextChapterInterface: ["接口"], mechanismCardIds: ["a"] } })).rejects.toThrow(/采用记录/);
   });
 
   it("两个原创项目可各自保存同类项目级规划，文档 ID 不会发生全局主键碰撞", async () => {
@@ -108,7 +108,7 @@ describe("StoryPlanning Application Service", () => {
     expect(second).toEqual(expect.arrayContaining([expect.objectContaining({ documentId: "planning:project_multi_b:project_intent" })]));
   });
 
-  it("章节契约允许零张机制，但不能引用未由用户采纳的机制资产", async () => {
+  it("章节契约允许零方法，但不再承担方法卡选择", async () => {
     const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
     const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
     await application.commands.execute({ ...command("project_recipe"), tool: "create_novel_project", args: { projectId: "project_recipe", title: "机制选择", status: "planning", payload: { schema_version: 1 } } });
@@ -122,8 +122,8 @@ describe("StoryPlanning Application Service", () => {
     await planning.selectStoryConcept({ command: { ...command("recipe_select"), actor: { kind: "human", id: "user_001" } }, projectId: "project_recipe", conceptId: "concept_1" });
 
     await expect(planning.saveChapterContract({ command: command("recipe_chapter"), projectId: "project_recipe", contract: chapterContract({ mechanismCardIds: ["mechanism_unadopted"] }) }))
-      .rejects.toThrow(/已采纳/);
-    await expect(planning.saveChapterContract({ command: command("recipe_chapter_empty"), projectId: "project_recipe", contract: chapterContract({ mechanismCardIds: [] }) }))
+      .rejects.toThrow(/采用记录/);
+    await expect(planning.saveChapterContract({ command: command("recipe_chapter_empty"), projectId: "project_recipe", contract: chapterContract({}) }))
       .resolves.toMatchObject({ kind: "ok" });
   });
 
@@ -152,6 +152,21 @@ describe("StoryPlanning Application Service", () => {
     expect(names).toEqual(expect.arrayContaining(["save_project_intent", "submit_story_concepts", "select_story_concept", "review_project_planning_document", "save_story_contract", "save_story_system", "save_book_outline", "save_stage_plan", "save_chapter_contract", "list_project_planning_documents"]));
     const saved = await handler({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "save_project_intent", arguments: { commandId: "mcp_intent", idempotencyKey: "mcp_intent", correlationId: "mcp_plan", projectId: "project_mcp", intent: { genre: "悬疑", audience: "成人", experienceGoals: ["未知感"], prohibitions: ["不仿写"], targetScale: "短篇" } } } });
     expect((saved?.result as { structuredContent: { kind: string } }).structuredContent).toMatchObject({ kind: "ok" });
+  });
+
+  it("不接受外部 MCP 参数伪造 desktop_ui 的 human actor；只有受信 sidecar transport 才能记录桌面人工", async () => {
+    const schemas = createSchemaRegistry(); registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    await application.commands.execute({ ...command("project_transport"), tool: "create_novel_project", args: { projectId: "project_transport", title: "传输审计", status: "planning", payload: { schema_version: 1 } } });
+    const planning = createStoryPlanningService({ driver, commands: application.commands, objects: await createNodeObjectStore({ workspacePath }) });
+    const external = createApplicationMcpJsonRpcHandler({ application, planning });
+    const intent = { genre: "悬疑", audience: "成人", experienceGoals: ["未知感"], prohibitions: ["不仿写"], targetScale: "短篇" };
+    await external({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "save_project_intent", arguments: { commandId: "mcp_spoof", idempotencyKey: "mcp_spoof", correlationId: "mcp_transport", projectId: "project_transport", _transport: "desktop_ui", intent } } });
+    await expect(driver.query<{ actor_json: string }>({ sql: "SELECT actor_json FROM commands WHERE command_id = ?", params: ["mcp_spoof"] })).resolves.toEqual([{ actor_json: '{"kind":"external_agent","id":"mcp"}' }]);
+
+    const desktop = createApplicationMcpJsonRpcHandler({ application, planning, transport: "desktop_ui" });
+    await desktop({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "save_project_intent", arguments: { commandId: "desktop_human", idempotencyKey: "desktop_human", correlationId: "mcp_transport", projectId: "project_transport", intent: { ...intent, genre: "科幻" } } } });
+    await expect(driver.query<{ actor_json: string }>({ sql: "SELECT actor_json FROM commands WHERE command_id = ?", params: ["desktop_human"] })).resolves.toEqual([{ actor_json: '{"kind":"human","id":"desktop-ui"}' }]);
   });
 
   it("MCP 代用户选择概念时必须留下持久化确认，不能绕过 human_via_agent 审计", async () => {
@@ -184,6 +199,6 @@ function command(id: string): Omit<CommandEnvelope, "tool" | "args"> {
 
 function chapterContract(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
-    chapterId: "chapter_recipe", ordinal: 1, entryState: ["入口状态"], exitState: ["出口状态"], desire: "完成目标", pressure: "时间压力", turningPoint: "异常发生", mustNotHappen: [], readerPromiseAction: "establish", emotionalCycle: "迟疑转为行动", nextChapterInterface: ["下一步问题"], mechanismCardIds: [], ...overrides,
+    chapterId: "chapter_recipe", ordinal: 1, entryState: ["入口状态"], exitState: ["出口状态"], desire: "完成目标", pressure: "时间压力", turningPoint: "异常发生", mustNotHappen: [], readerPromiseAction: "establish", emotionalCycle: "迟疑转为行动", nextChapterInterface: ["下一步问题"], ...overrides,
   };
 }

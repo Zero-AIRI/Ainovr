@@ -95,7 +95,7 @@ describe("Application MCP JSON-RPC", () => {
     const document = await handler({ jsonrpc: "2.0", id: 32, method: "tools/call", params: { name: "get_document", arguments: { projectId: "project_001", documentId: "production:chapter_draft:chapter_001:v1" } } });
     expect((document?.result as { structuredContent: { content: string } }).structuredContent).toMatchObject({ content: "只由领域工具读取的正文" });
 
-    const provider = await handler({ jsonrpc: "2.0", id: 33, method: "tools/call", params: { name: "save_provider_profile", arguments: { commandId: "command_provider_001", idempotencyKey: "idem_provider_001", correlationId: "correlation_provider_001", providerProfileId: "provider_local", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", defaultModel: "qwen3.5:9b", routes: [{ role: "writer", model: "qwen3.5:9b" }] } } });
+    const provider = await handler({ jsonrpc: "2.0", id: 33, method: "tools/call", params: { name: "save_provider_profile", arguments: { commandId: "command_provider_001", idempotencyKey: "idem_provider_001", correlationId: "correlation_provider_001", providerProfileId: "provider_local", name: "本机 Ollama", baseURL: "http://localhost:11434/v1", protocol: "chat_completions", contextWindowTokens: 4096, maxOutputTokens: 1024, safetyMarginRatio: 0.2, defaultModel: "qwen3.5:9b", routes: [{ role: "writer", model: "qwen3.5:9b" }] } } });
     expect((provider?.result as { structuredContent: unknown }).structuredContent).toEqual({ kind: "ok", revision: 1, resourceRefs: [{ type: "provider_profile", id: "provider_local" }] });
 
     const settings = await handler({ jsonrpc: "2.0", id: 34, method: "tools/call", params: { name: "get_workspace_settings", arguments: {} } });
@@ -144,6 +144,70 @@ describe("Application MCP JSON-RPC", () => {
     expect(batch.run).toHaveBeenCalledTimes(2);
   });
 
+  it("P6 实验只公开受控的保存、匿名候选 Writer 与盲评工具", async () => {
+    const schemas = createSchemaRegistry();
+    registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    const experimentWriter = { start: vi.fn(), run: vi.fn(), getTask: vi.fn(), cancel: vi.fn() };
+    const experimentBlindReview = { start: vi.fn(), run: vi.fn(), getTask: vi.fn(), cancel: vi.fn(), getReport: vi.fn() };
+    const handler = createApplicationMcpJsonRpcHandler({
+      application,
+      mechanismEffectExperiments: { save: vi.fn(), get: vi.fn(), getExecutionPlan: vi.fn() } as never,
+      mechanismEffectWriter: experimentWriter as never,
+      mechanismEffectBlindReview: experimentBlindReview as never,
+    });
+
+    const listed = await handler({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const tools = (listed?.result as { tools: Array<{ name: string; inputSchema: { required: string[] } }> }).tools;
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      "save_mechanism_effect_experiment",
+      "get_mechanism_effect_experiment",
+      "start_mechanism_effect_experiment_candidate",
+      "resume_mechanism_effect_experiment_candidate",
+      "start_mechanism_effect_experiment_blind_review",
+      "resume_mechanism_effect_experiment_blind_review",
+      "get_mechanism_effect_experiment_blind_review",
+    ]));
+    const start = tools.find((tool) => tool.name === "start_mechanism_effect_experiment_candidate");
+    expect(start?.inputSchema.required).not.toContain("baseURL");
+    expect(start?.inputSchema.required).not.toContain("model");
+    const blindReview = tools.find((tool) => tool.name === "start_mechanism_effect_experiment_blind_review");
+    expect(blindReview?.inputSchema.required).not.toContain("baseURL");
+    expect(blindReview?.inputSchema.required).not.toContain("model");
+    expect(tools.map((tool) => tool.name)).not.toContain("get_mechanism_effect_experiment_mapping");
+  });
+
+  it("P6 盲评 MCP 只将冻结标识交给盲评服务，并支持恢复与读取匿名报告", async () => {
+    const schemas = createSchemaRegistry();
+    registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    const blindReview = {
+      start: vi.fn().mockResolvedValue({ kind: "accepted", taskId: "blind_task_001" }),
+      run: vi.fn().mockResolvedValue({ taskId: "blind_task_001", status: "succeeded" }),
+      getTask: vi.fn().mockResolvedValue({ taskId: "blind_task_001", status: "succeeded" }),
+      cancel: vi.fn(),
+      getReport: vi.fn().mockResolvedValue({ kind: "mechanism_effect_experiment_blind_review", pairId: "pair_001" }),
+    };
+    const handler = createApplicationMcpJsonRpcHandler({
+      application,
+      mechanismEffectExperiments: { save: vi.fn(), get: vi.fn(), getExecutionPlan: vi.fn() } as never,
+      mechanismEffectWriter: { start: vi.fn(), run: vi.fn(), getTask: vi.fn(), cancel: vi.fn() } as never,
+      mechanismEffectBlindReview: blindReview as never,
+    });
+
+    const started = await handler({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "start_mechanism_effect_experiment_blind_review", arguments: {
+      commandId: "blind_start", idempotencyKey: "blind_start", correlationId: "blind_start", projectId: "project_001", experimentId: "experiment_001", pairId: "pair_001", sourceManifestId: "manifest_001", taskId: "blind_task_001", documentId: "blind_report_001", title: "匿名盲评",
+    } } });
+    expect((started?.result as { structuredContent: unknown }).structuredContent).toEqual({ kind: "accepted", taskId: "blind_task_001" });
+    expect(blindReview.start).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project_001", experimentId: "experiment_001", pairId: "pair_001", sourceManifestId: "manifest_001", taskId: "blind_task_001", documentId: "blind_report_001", command: expect.objectContaining({ actor: { kind: "external_agent", id: "mcp" } }) }));
+
+    const resumed = await handler({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "resume_mechanism_effect_experiment_blind_review", arguments: { taskId: "blind_task_001" } } });
+    expect((resumed?.result as { structuredContent: unknown }).structuredContent).toMatchObject({ taskId: "blind_task_001", status: "succeeded" });
+    const report = await handler({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get_mechanism_effect_experiment_blind_review", arguments: { documentId: "blind_report_001" } } });
+    expect((report?.result as { structuredContent: unknown }).structuredContent).toEqual({ kind: "mechanism_effect_experiment_blind_review", pairId: "pair_001" });
+    expect(blindReview.getReport).toHaveBeenCalledWith({ documentId: "blind_report_001" });
+  });
+
   it("任务工具通过 TaskRunner 查询、取消、等待和重试", async () => {
     const schemas = createSchemaRegistry();
     registerCorePayloadSchemas(schemas);
@@ -182,6 +246,28 @@ describe("Application MCP JSON-RPC", () => {
     const approved = await handler({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "approve_confirmation", arguments: { confirmationId: "confirmation:command_confirm_001", reason: "用户批准" } } });
     expect((approved?.result as { structuredContent: { kind: string } }).structuredContent).toMatchObject({ kind: "ok" });
     await expect(driver.query<{ value_json: string }>({ sql: "SELECT value_json FROM workspace_meta WHERE key = 'confirmed'", params: [] })).resolves.toEqual([{ value_json: '{"schema_version":1,"value":"approved"}' }]);
+  });
+
+  it("桌面 transport 的基础工作区写入和项目创建都记录 human，而 stdio 仍记录 external_agent", async () => {
+    const schemas = createSchemaRegistry();
+    registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    const desktop = createApplicationMcpJsonRpcHandler({ application, transport: "desktop_ui" });
+    const external = createApplicationMcpJsonRpcHandler(application);
+    const settingsArgs = { commandId: "desktop_settings", idempotencyKey: "desktop_settings", correlationId: "transport", automationMode: "manual", contextWindowTokens: 16_384, maxOutputTokens: 2_048, safetyMarginRatio: 0.2, cloudEscalation: "never" };
+    await desktop({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "save_workspace_settings", arguments: settingsArgs } });
+    await desktop({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "create_novel_project", arguments: { commandId: "desktop_project", idempotencyKey: "desktop_project", correlationId: "transport", projectId: "desktop_project", title: "桌面项目", status: "planning", payload: { schema_version: 1 } } } });
+    await external({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "create_novel_project", arguments: { commandId: "stdio_project", idempotencyKey: "stdio_project", correlationId: "transport", projectId: "stdio_project", title: "stdio 项目", status: "planning", payload: { schema_version: 1 } } } });
+    await expect(driver.query<{ command_id: string; actor_json: string }>({ sql: "SELECT command_id, actor_json FROM commands WHERE command_id IN (?, ?, ?) ORDER BY command_id", params: ["desktop_project", "desktop_settings", "stdio_project"] })).resolves.toEqual([
+      { command_id: "desktop_project", actor_json: '{"kind":"human","id":"desktop-ui"}' },
+      { command_id: "desktop_settings", actor_json: '{"kind":"human","id":"desktop-ui"}' },
+      { command_id: "stdio_project", actor_json: '{"kind":"external_agent","id":"mcp"}' },
+    ]);
+    const commands = createCommandService(driver, confirmationPlanner(), () => 1_700_000_000_000);
+    await commands.execute({ schemaVersion: 1, commandId: "desktop_confirmation_source", idempotencyKey: "desktop_confirmation_source", correlationId: "transport", actor: { kind: "human", id: "desktop-ui" }, tool: "confirmed_write", args: {}, createdAt: 1_700_000_000_000 });
+    const approvalHandler = createApplicationMcpJsonRpcHandler({ application: { ...application, commands }, transport: "desktop_ui" });
+    await approvalHandler({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "approve_confirmation", arguments: { confirmationId: "confirmation:desktop_confirmation_source", reason: "桌面人工确认" } } });
+    await expect(driver.query<{ actor_json: string }>({ sql: "SELECT actor_json FROM confirmations WHERE confirmation_id = ?", params: ["confirmation:desktop_confirmation_source"] })).resolves.toEqual([{ actor_json: '{"kind":"human","id":"desktop-ui"}' }]);
   });
 
   it("MCP 可以读取并拒绝待确认命令，且不返回原始命令参数", async () => {
@@ -241,6 +327,40 @@ describe("Application MCP JSON-RPC", () => {
     expect((draft?.result as { structuredContent: { text: string; model: string } }).structuredContent).toMatchObject({ text: "雨声落在玻璃上。", model: "configured-route" });
   });
 
+  it("manual 自动化模式只排队新任务，显式 resume 仍可执行", async () => {
+    const schemas = createSchemaRegistry();
+    registerCorePayloadSchemas(schemas);
+    const application = createWorkspaceApplicationService({ driver, schemas, now: () => 1_700_000_000_000 });
+    await application.commands.execute({
+      schemaVersion: 1, commandId: "command_manual_project", idempotencyKey: "idem_manual_project", correlationId: "correlation_manual",
+      actor: { kind: "human", id: "user_001" }, tool: "create_novel_project",
+      args: { projectId: "project_manual", title: "手动模式", status: "planning", payload: { schema_version: 1 } }, createdAt: 1_700_000_000_000,
+    });
+    await expect(application.commands.execute({
+      schemaVersion: 1, commandId: "command_manual_settings", idempotencyKey: "idem_manual_settings", correlationId: "correlation_manual",
+      actor: { kind: "human", id: "user_001" }, tool: "save_workspace_settings",
+      args: { automationMode: "manual", contextWindowTokens: 16_384, maxOutputTokens: 2_048, safetyMarginRatio: 0.2, cloudEscalation: "never" }, createdAt: 1_700_000_000_000,
+    })).resolves.toMatchObject({ kind: "ok", revision: 1 });
+    const tasks = createTaskRunner(driver, { now: () => 1_700_000_000_000 });
+    const creation = createLocalCreationService({
+      driver, schemas, commands: application.commands, tasks, objects: await createNodeObjectStore({ workspacePath }), hostId: "mcp-manual-test",
+      caller: { complete: async () => ({ text: "手动模式正文", finishReason: "stop" }) }, now: () => 1_700_000_000_000,
+    });
+    const handler = createApplicationMcpJsonRpcHandler({ application, tasks, creation });
+    const started = await handler({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "start_local_creation", arguments: {
+        commandId: "command_manual_draft", idempotencyKey: "idem_manual_draft", correlationId: "correlation_manual",
+        taskId: "task_manual_draft", documentId: "draft_manual", projectId: "project_manual", title: "第一章", prompt: "手动启动。",
+      } },
+    });
+    expect((started?.result as { structuredContent: unknown }).structuredContent).toEqual({ kind: "accepted", taskId: "task_manual_draft" });
+    await expect(tasks.get("task_manual_draft")).resolves.toMatchObject({ status: "queued" });
+
+    await handler({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "resume_local_creation", arguments: { taskId: "task_manual_draft" } } });
+    await tasks.wait("task_manual_draft", 1_000);
+    await expect(tasks.get("task_manual_draft")).resolves.toMatchObject({ status: "succeeded" });
+  });
+
   it("MCP 仅通过明确文本导入参考作品，并按字节范围读取原文摘录", async () => {
     const schemas = createSchemaRegistry();
     registerCorePayloadSchemas(schemas);
@@ -254,7 +374,7 @@ describe("Application MCP JSON-RPC", () => {
     const tasks = createTaskRunner(driver, { now: () => 1_700_000_000_000 });
     const factExtraction = createLocalFactExtractionService({
       driver, commands: application.commands, tasks, objects: await createNodeObjectStore({ workspacePath }), facts,
-      caller: { complete: async () => ({ text: JSON.stringify({ facts: [{ id: "fact_001", kind: "event", rawLabel: null, statement: "出现中文原文", subject: null, object: null, evidenceSpanIds: ["sp00001"], epistemicStatus: "observed" }] }), finishReason: "stop" }) },
+      caller: { complete: async () => ({ text: JSON.stringify({ facts: [{ id: "fact_001", kind: "event", rawLabel: null, statement: "出现中文原文", subject: null, object: null, evidenceSpanIds: ["segmentation_001:sp00001"], epistemicStatus: "observed" }] }), finishReason: "stop" }) },
       hostId: "mcp-fact-test", now: () => 1_700_000_000_000,
     });
     const threads = createThreadGraphService({ driver, commands: application.commands, objects: await createNodeObjectStore({ workspacePath }), now: () => 1_700_000_000_000 });
@@ -304,11 +424,11 @@ describe("Application MCP JSON-RPC", () => {
     await tasks.wait("fact_task_001", 1_000);
     const ledger = await handler({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "get_fact_ledger", arguments: { analysisProjectId: "analysis_001", analysisUnitId: unitId } } });
     expect((ledger?.result as { structuredContent: Array<{ id: string; evidenceSpanIds: string[] }> }).structuredContent).toEqual([
-      expect.objectContaining({ id: "fact_001", evidenceSpanIds: ["sp00001"] }),
+      expect.objectContaining({ id: "fact_001", evidenceSpanIds: ["segmentation_001:sp00001"] }),
     ]);
     const threadSubmitted = await handler({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "submit_thread_graph", arguments: {
       commandId: "command_thread_001", idempotencyKey: "idem_thread_001", correlationId: "correlation_thread_001", analysisProjectId: "analysis_001",
-      rawOutput: JSON.stringify({ threads: [{ id: "thread_001", kind: "event", title: "原文事件", episodes: [{ id: "episode_001", role: "setup", rawLabel: null, summary: "原文事件出现", evidenceSpanIds: ["sp00001"], ordinal: 1 }], epistemicStatus: "observed", lifecycle: "open" }] }),
+      rawOutput: JSON.stringify({ threads: [{ id: "thread_001", kind: "event", title: "原文事件", episodes: [{ id: "episode_001", role: "setup", rawLabel: null, summary: "原文事件出现", evidenceSpanIds: ["segmentation_001:sp00001"], ordinal: 1 }], epistemicStatus: "observed", lifecycle: "open" }] }),
     } } });
     expect((threadSubmitted?.result as { structuredContent: { kind: string } }).structuredContent).toMatchObject({ kind: "ok" });
     const threadGraph = await handler({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "get_thread_graph", arguments: { analysisProjectId: "analysis_001" } } });
@@ -320,14 +440,14 @@ describe("Application MCP JSON-RPC", () => {
     expect((pendingBrief?.result as { structuredContent: { status: string } }).structuredContent).toMatchObject({ status: "pending_review" });
     const briefApproved = await handler({ jsonrpc: "2.0", id: 15, method: "tools/call", params: { name: "approve_analysis_brief", arguments: { commandId: "command_brief_approve_001", idempotencyKey: "idem_brief_approve_001", correlationId: "correlation_brief_001", analysisProjectId: "analysis_001" } } });
     expect((briefApproved?.result as { structuredContent: { kind: string } }).structuredContent).toMatchObject({ kind: "ok" });
-    const conclusionOutput = JSON.stringify({ conclusions: [{ id: "conclusion_001", researchQuestionId: "question_001", conclusion: "异常先出现能建立期待。", observations: [{ id: "observation_001", statement: "异常班次先于解释出现。", evidenceSpanIds: ["sp00001"] }], evidenceSpanIds: ["sp00001"], counterEvidenceSpanIds: [], alternativeExplanations: ["局部场景调度"], applicabilityBoundaries: ["信息控制释放"], productionImplications: ["先给异常再延后解释。"], coverageStatus: "complete", epistemicStatus: "inferred" }] });
+    const conclusionOutput = JSON.stringify({ conclusions: [{ id: "conclusion_001", researchQuestionId: "question_001", conclusion: "异常先出现能建立期待。", observations: [{ id: "observation_001", statement: "异常班次先于解释出现。", evidenceSpanIds: ["segmentation_001:sp00001"] }], evidenceSpanIds: ["segmentation_001:sp00001"], counterEvidenceSpanIds: [], alternativeExplanations: ["局部场景调度"], applicabilityBoundaries: ["信息控制释放"], productionImplications: ["先给异常再延后解释。"], coverageStatus: "complete", epistemicStatus: "inferred" }] });
     const conclusionSubmitted = await handler({ jsonrpc: "2.0", id: 16, method: "tools/call", params: { name: "submit_research_conclusions", arguments: { commandId: "command_conclusion_001", idempotencyKey: "idem_conclusion_001", correlationId: "correlation_conclusion_001", analysisProjectId: "analysis_001", researchQuestionId: "question_001", rawOutput: conclusionOutput } } });
     expect((conclusionSubmitted?.result as { structuredContent: { kind: string } }).structuredContent).toMatchObject({ kind: "ok" });
     const conclusionRead = await handler({ jsonrpc: "2.0", id: 17, method: "tools/call", params: { name: "get_research_conclusions", arguments: { analysisProjectId: "analysis_001", researchQuestionId: "question_001" } } });
     expect((conclusionRead?.result as { structuredContent: Array<{ id: string }> }).structuredContent).toEqual([expect.objectContaining({ id: "conclusion_001" })]);
     const workItem = await handler({ jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "get_falsification_work_item", arguments: { analysisProjectId: "analysis_001", conclusionId: "conclusion_001" } } });
     expect((workItem?.result as { structuredContent: { proposition: string } }).structuredContent).toMatchObject({ proposition: "异常先出现能建立期待。" });
-    const falsificationOutput = JSON.stringify({ assessment: { conclusionId: "conclusion_001", status: "bounded", counterEvidenceSpanIds: ["sp00001"], alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["单一计算单元"], sampleBiasNotes: ["样本有限"] } });
+    const falsificationOutput = JSON.stringify({ assessment: { conclusionId: "conclusion_001", status: "bounded", counterEvidenceSpanIds: ["segmentation_001:sp00001"], alternativeExplanations: ["局部场景调度"], applicabilityLimits: ["单一计算单元"], sampleBiasNotes: ["样本有限"] } });
     const falsificationSubmitted = await handler({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "submit_independent_falsification", arguments: { commandId: "command_falsification_001", idempotencyKey: "idem_falsification_001", correlationId: "correlation_falsification_001", analysisProjectId: "analysis_001", conclusionId: "conclusion_001", rawOutput: falsificationOutput } } });
     expect((falsificationSubmitted?.result as { structuredContent: { kind: string } }).structuredContent).toMatchObject({ kind: "ok" });
     const falsificationRead = await handler({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "get_independent_falsification", arguments: { analysisProjectId: "analysis_001", conclusionId: "conclusion_001" } } });

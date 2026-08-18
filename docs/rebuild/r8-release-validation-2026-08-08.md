@@ -2,9 +2,11 @@
 
 状态：**R8 发布复现门通过（2026-08-09 clean clone）**。全量长文本、人工事实准确率抽查与云端模型对比按用户指示范围豁免，未被写成通过。新系统主体已形成受审查 Git 提交，并从独立 clone 验证。Tauri WebView 仅通过打包 Node MCP sidecar 的受限领域 RPC 访问工作区。本记录只保留可复查的运行结果；不输出 `settings.json`、API Key、参考原文或模型 Prompt。
 
+> **历史计数说明。** 本文中的 `105` 个工具和 `63/245` 回归是当时 clean clone 的历史证据，不能被改写为当前状态。2026-08-10 当前工作树的增量复核为 114 个领域工具和 `64 files / 274 tests`；它没有重新替代或扩大 clean-clone 证据。详见 [完成度审计](final-completion-audit-2026-08-08.md) 与 [已裁决执行基线](decision-execution-baseline-2026-08-10.md)。
+
 ## 真实工作区备份与恢复
 
-在 `S:\Ainovr` 的当前 SQLite 工作区通过领域 CLI 创建并完成维护任务：
+在当时的 SQLite 工作区通过领域 CLI 创建并完成维护任务：
 
 | 动作 | 领域任务 | 结果 |
 |---|---|---|

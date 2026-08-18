@@ -88,35 +88,42 @@ fn assert_desktop_mcp_request(request: &JsonValue) -> Result<(), String> {
 
 fn spawn_desktop_mcp_sidecar(app: &AppHandle) -> Result<DesktopMcpChild, String> {
     let script = if cfg!(debug_assertions) {
-        workspace_root()?.join("dist-mcp").join("ainovr-mcp.mjs")
+        workspace_root(app)?.join("dist-mcp").join("ainovr-mcp.mjs")
     } else {
-        app.path()
-            .resource_dir()
-            .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?
-            .join("desktop-sidecar")
+        release_sidecar_directory(
+            app.path()
+                .resource_dir()
+                .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?,
+        )?
             .join("ainovr-mcp.mjs")
     };
     if !script.is_file() {
         return Err(format!("Ainovr desktop MCP companion is missing: {}", script.display()));
     }
+    let script = node_process_path(script);
     let node = if cfg!(debug_assertions) {
-        std::env::var("AINOVR_NODE_EXECUTABLE").unwrap_or_else(|_| "node".to_string())
+        PathBuf::from(std::env::var("AINOVR_NODE_EXECUTABLE").unwrap_or_else(|_| "node".to_string()))
     } else {
-        app.path()
-            .resource_dir()
-            .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?
-            .join("desktop-sidecar")
-            .join("node.exe")
-            .to_string_lossy()
-            .into_owned()
+        node_process_path(release_sidecar_directory(
+            app.path()
+                .resource_dir()
+                .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?,
+        )?
+            .join("node.exe"))
     };
-    let mut child = Command::new(node)
+    let workspace = node_process_path(workspace_root(app)?);
+    let mut command = Command::new(node);
+    command
         .arg(script)
         .arg("--workspace")
-        .arg(workspace_root()?)
+        .arg(workspace)
+        .arg("--desktop-ui")
+        .env("AINOVR_DESKTOP_SIDECAR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    configure_sidecar_process(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start Ainovr desktop MCP companion: {error}"))?;
     let stdin = child
@@ -134,18 +141,68 @@ fn spawn_desktop_mcp_sidecar(app: &AppHandle) -> Result<DesktopMcpChild, String>
     })
 }
 
-fn workspace_root() -> Result<PathBuf, String> {
+#[cfg(windows)]
+fn configure_sidecar_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // 运行时组装豁免：Node 是桌面端内部 sidecar，不应创建用户可见的控制台窗口。
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_sidecar_process(_command: &mut Command) {}
+
+fn workspace_root(app: &AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         return std::env::current_dir()
             .map_err(|error| format!("Could not resolve development workspace: {error}"))
             .and_then(development_workspace_root);
     }
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("Could not resolve Ainovr executable: {error}"))?;
-    executable
-        .parent()
-        .map(PathBuf::from)
-        .ok_or_else(|| "Could not resolve portable Ainovr workspace.".to_string())
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve Ainovr application data directory: {error}"))
+        .and_then(|app_data_dir| {
+            release_workspace_root_with_override(
+                app_data_dir,
+                std::env::var("AINOVR_WORKSPACE").ok().as_deref(),
+            )
+        })
+}
+
+/// 发布态只允许一个显式工作区覆盖，便于 CLI、MCP 与桌面端对同一隔离目录验收。
+/// 未设置时继续使用 Tauri 提供的用户可写应用数据目录。
+fn release_workspace_root_with_override(
+    app_data_dir: PathBuf,
+    environment_workspace: Option<&str>,
+) -> Result<PathBuf, String> {
+    if let Some(workspace) = environment_workspace.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(workspace));
+    }
+    if app_data_dir.as_os_str().is_empty() {
+        Err("Ainovr application data directory is empty.".to_string())
+    } else {
+        Ok(app_data_dir)
+    }
+}
+
+fn release_sidecar_directory(resource_dir: PathBuf) -> Result<PathBuf, String> {
+    if resource_dir.as_os_str().is_empty() {
+        Err("Ainovr resource directory is empty.".to_string())
+    } else {
+        Ok(resource_dir.join("resources").join("desktop-sidecar"))
+    }
+}
+
+fn node_process_path(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
 }
 
 fn development_workspace_root(current: PathBuf) -> Result<PathBuf, String> {
@@ -174,6 +231,53 @@ mod tests {
     fn development_workspace_root_preserves_an_existing_workspace_directory() {
         let current = PathBuf::from(r"C:\work\Ainovr");
         assert_eq!(development_workspace_root(current.clone()).expect("resolve workspace root"), current);
+    }
+
+    #[test]
+    fn release_workspace_root_uses_user_writable_application_data() {
+        assert_eq!(
+            release_workspace_root_with_override(PathBuf::from(r"C:\Users\user\AppData\Local\com.ainovr.app"), None).expect("resolve app data"),
+            PathBuf::from(r"C:\Users\user\AppData\Local\com.ainovr.app")
+        );
+        assert!(release_workspace_root_with_override(PathBuf::new(), None).is_err());
+    }
+
+    #[test]
+    fn release_workspace_root_prefers_explicit_ainovr_workspace() {
+        assert_eq!(
+            release_workspace_root_with_override(
+                PathBuf::from(r"C:\Users\user\AppData\Local\com.ainovr.app"),
+                Some(r"C:\fixture\com.ainovr.app"),
+            )
+            .expect("resolve explicit workspace"),
+            PathBuf::from(r"C:\fixture\com.ainovr.app"),
+        );
+    }
+
+    #[test]
+    fn release_sidecar_directory_matches_the_bundled_resource_layout() {
+        assert_eq!(
+            release_sidecar_directory(PathBuf::from(r"C:\Program Files\Ainovr"))
+                .expect("resolve release sidecar directory"),
+            PathBuf::from(r"C:\Program Files\Ainovr\resources\desktop-sidecar")
+        );
+        assert!(release_sidecar_directory(PathBuf::new()).is_err());
+    }
+
+    #[test]
+    fn node_process_paths_remove_windows_verbatim_prefixes() {
+        assert_eq!(
+            node_process_path(PathBuf::from(r"\\?\S:\Ainovr\resources\desktop-sidecar\ainovr-mcp.mjs")),
+            PathBuf::from(r"S:\Ainovr\resources\desktop-sidecar\ainovr-mcp.mjs")
+        );
+        assert_eq!(
+            node_process_path(PathBuf::from(r"\\?\UNC\server\share\ainovr-mcp.mjs")),
+            PathBuf::from(r"\\server\share\ainovr-mcp.mjs")
+        );
+        assert_eq!(
+            node_process_path(PathBuf::from(r"C:\Ainovr\ainovr-mcp.mjs")),
+            PathBuf::from(r"C:\Ainovr\ainovr-mcp.mjs")
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import type { LocalCreationOutputMode, LocalModelCaller } from "@/application/local-creation-service";
+import type { ModelWireProtocol } from "@/application/model-resolver";
 
 export interface CreateLocalModelCallerOptions {
   fetch?: typeof globalThis.fetch;
@@ -12,7 +13,7 @@ export function createLocalModelCaller(options: CreateLocalModelCallerOptions = 
   const fetcher = options.fetch ?? globalThis.fetch;
   return {
     async complete(input, signal) {
-      const endpoint = localCompletionEndpoint(input.baseURL);
+      const endpoint = localCompletionEndpoint(input.baseURL, input.protocol);
       const response = await fetcher(endpoint.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -34,7 +35,7 @@ export function createLocalModelCaller(options: CreateLocalModelCallerOptions = 
 
 type LocalEndpoint = { kind: "ollama" | "openai_compatible"; url: string };
 
-function localCompletionEndpoint(baseURL: string): LocalEndpoint {
+function localCompletionEndpoint(baseURL: string, protocol?: ModelWireProtocol): LocalEndpoint {
   let parsed: URL;
   try {
     parsed = new URL(baseURL.trim());
@@ -45,7 +46,8 @@ function localCompletionEndpoint(baseURL: string): LocalEndpoint {
     throw new Error("本地创作只允许请求本机回环 HTTP 地址。");
   }
   const normalized = parsed.toString().replace(/\/+$/, "");
-  if (!new URL(normalized).pathname.endsWith("/v1")) throw new Error("本地模型 baseURL 必须以 /v1 结尾。");
+  if (protocol === "ollama_native") return { kind: "ollama", url: new URL("/api/chat", parsed.origin).toString() };
+  if (!new URL(normalized).pathname.endsWith("/v1")) throw new Error("本地 OpenAI 兼容模型 baseURL 必须以 /v1 结尾。");
   // Ollama 的 OpenAI 兼容层在部分 Qwen 模型上不会透传 think:false，
   // 会把整个输出预算花在 reasoning。标准端口走原生接口才可可靠禁用思考。
   if (parsed.port === "11434") return { kind: "ollama", url: new URL("/api/chat", parsed.origin).toString() };

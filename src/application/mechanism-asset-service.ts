@@ -32,12 +32,18 @@ export interface MechanismAssetDetail {
   adoptions: Array<{ projectId: string; status: MechanismReviewStatus; createdAt: number }>;
 }
 
+export interface AdoptedMechanismSnapshot {
+  revision: number;
+  card: TransferMechanismCard;
+}
+
 export interface MechanismAssetService {
   propose(input: { command: Omit<CommandEnvelope, "tool" | "args">; analysisProjectId: string; rawOutput: string }): Promise<CommandResult>;
   listCandidates(analysisProjectId?: string): Promise<MechanismAssetDetail[]>;
   get(mechanismAssetId: string): Promise<MechanismAssetDetail | null>;
   review(input: { command: Omit<CommandEnvelope, "tool" | "args"> & { expectedRevision?: number; projectId?: string }; mechanismAssetId: string; status: MechanismReviewStatus }): Promise<CommandResult>;
   listAdopted(projectId: string): Promise<TransferMechanismCard[]>;
+  listAdoptedSnapshots(projectId: string): Promise<AdoptedMechanismSnapshot[]>;
 }
 
 export interface CreateMechanismAssetServiceOptions {
@@ -52,6 +58,33 @@ export interface CreateMechanismAssetServiceOptions {
  * projectTransferMechanismCard 取得脱敏投影。
  */
 export function createMechanismAssetService(options: CreateMechanismAssetServiceOptions): MechanismAssetService {
+  const listAdoptedSnapshots = async (projectId: string): Promise<AdoptedMechanismSnapshot[]> => {
+    assertNonEmpty(projectId, "projectId");
+    await assertNovelProjectExists(options.driver, projectId);
+    const rows = await options.driver.query<AdoptedRow>({
+      sql: `SELECT asset.mechanism_asset_id, asset.analysis_project_id, asset.status, asset.current_revision,
+                   revision.payload_json, revision.neutral_example_object_hash, adoption.status AS adoption_status
+            FROM mechanism_adoptions adoption
+            INNER JOIN mechanism_assets asset ON asset.mechanism_asset_id = adoption.mechanism_asset_id
+            INNER JOIN mechanism_asset_revisions revision ON revision.mechanism_asset_id = asset.mechanism_asset_id AND revision.revision = asset.current_revision
+            WHERE adoption.project_id = ?
+              AND adoption.adoption_id = (
+                SELECT nested.adoption_id FROM mechanism_adoptions nested
+                WHERE nested.mechanism_asset_id = adoption.mechanism_asset_id AND nested.project_id = adoption.project_id
+                ORDER BY nested.created_at DESC, nested.adoption_id DESC LIMIT 1
+              )
+              AND adoption.status IN ('adopted', 'editor_only')
+            ORDER BY adoption.created_at ASC, adoption.adoption_id ASC`,
+      params: [projectId],
+    });
+    return rows.map((row) => {
+      const payload = parsePayload(row.payload_json);
+      const adoption = readReviewStatus(row.adoption_status);
+      const projected = projectTransferMechanismCard({ ...payload.card, lifecycle: "verified", adoption }, { forbiddenTerms: payload.forbiddenTerms }, { allowEditorOnly: adoption === "editor_only" });
+      if (!projected.ok) throw new Error(`机制 ${row.mechanism_asset_id} 无法进入 Writer 投影：${projected.reason}。`);
+      return { revision: row.current_revision, card: projected.card };
+    });
+  };
   return {
     async propose(input) {
       assertNonEmpty(input.analysisProjectId, "analysisProjectId");
@@ -136,32 +169,10 @@ export function createMechanismAssetService(options: CreateMechanismAssetService
     },
 
     async listAdopted(projectId) {
-      assertNonEmpty(projectId, "projectId");
-      await assertNovelProjectExists(options.driver, projectId);
-      const rows = await options.driver.query<AdoptedRow>({
-        sql: `SELECT asset.mechanism_asset_id, asset.analysis_project_id, asset.status, asset.current_revision,
-                     revision.payload_json, revision.neutral_example_object_hash, adoption.status AS adoption_status
-              FROM mechanism_adoptions adoption
-              INNER JOIN mechanism_assets asset ON asset.mechanism_asset_id = adoption.mechanism_asset_id
-              INNER JOIN mechanism_asset_revisions revision ON revision.mechanism_asset_id = asset.mechanism_asset_id AND revision.revision = asset.current_revision
-              WHERE adoption.project_id = ?
-                AND adoption.adoption_id = (
-                  SELECT nested.adoption_id FROM mechanism_adoptions nested
-                  WHERE nested.mechanism_asset_id = adoption.mechanism_asset_id AND nested.project_id = adoption.project_id
-                  ORDER BY nested.created_at DESC, nested.adoption_id DESC LIMIT 1
-                )
-                AND adoption.status IN ('adopted', 'editor_only')
-              ORDER BY adoption.created_at ASC, adoption.adoption_id ASC`,
-        params: [projectId],
-      });
-      return rows.map((row) => {
-        const payload = parsePayload(row.payload_json);
-        const adoption = readReviewStatus(row.adoption_status);
-        const projected = projectTransferMechanismCard({ ...payload.card, lifecycle: "verified", adoption }, { forbiddenTerms: payload.forbiddenTerms }, { allowEditorOnly: adoption === "editor_only" });
-        if (!projected.ok) throw new Error(`机制 ${row.mechanism_asset_id} 无法进入 Writer 投影：${projected.reason}。`);
-        return projected.card;
-      });
+      return (await listAdoptedSnapshots(projectId)).map((snapshot) => snapshot.card);
     },
+
+    listAdoptedSnapshots,
   };
 }
 
@@ -340,8 +351,9 @@ async function readOriginAssessments(driver: SqlDriver, analysisProjectId: strin
 async function readProjectSpans(driver: SqlDriver, analysisProjectId: string): Promise<Array<{ id: string; startByte: number; analysisUnitId: string | null }>> {
   const rows = await driver.query<{ span_id: string; start_byte: number; analysis_unit_id: string | null }>({
     sql: `SELECT span.span_id, span.start_byte, span.analysis_unit_id FROM source_spans span
-          INNER JOIN analysis_projects project ON project.source_edition_id = span.source_edition_id
-          WHERE project.analysis_project_id = ?`,
+          INNER JOIN analysis_units unit ON unit.analysis_unit_id = span.analysis_unit_id
+          INNER JOIN analysis_projects project ON project.segmentation_id = unit.segmentation_id
+          WHERE project.analysis_project_id = ? AND unit.segmentation_id = project.segmentation_id`,
     params: [analysisProjectId],
   });
   if (rows.length === 0) throw new Error("AnalysisProject 没有可引用的 SourceSpan。 ");

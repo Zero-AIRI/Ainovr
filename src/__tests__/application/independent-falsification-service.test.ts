@@ -65,7 +65,7 @@ describe("独立反证服务", () => {
     await expect(driver.query<{ status: string }>({ sql: "SELECT status FROM coverage_entries WHERE module = 'independent_falsification'", params: [] }))
       .resolves.toEqual([{ status: "not_observed" }]);
     await expect(falsification.getWorkItem("analysis_001", "missing")).rejects.toThrow(/不存在/);
-    expect(spanId).toMatch(/^sp/);
+    expect(spanId).toMatch(/^segmentation_001:sp/);
   });
 
   async function prepareConclusion() {

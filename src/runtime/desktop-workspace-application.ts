@@ -7,6 +7,36 @@ export interface CreateDesktopWorkspaceApplicationOptions { invoke: TauriInvoke;
 
 type RecordValue = Record<string, unknown>;
 
+/** 仅在 Rust 已丢弃旧 sidecar 后重试不会改变项目事实的查询。 */
+const RETRYABLE_READ_ONLY_TOOLS = new Set([
+  "get_workspace_status",
+  "list_novel_projects",
+  "get_novel_project",
+  "get_project_workbench",
+  "list_project_documents",
+  "get_document",
+  "list_pending_planning_documents",
+  "list_pending_mechanism_assets",
+  "list_coverage_gaps",
+  "list_actionable_tasks",
+  "list_reference_works",
+  "get_reference_workbench",
+  "get_evidence_excerpt",
+  "list_provider_profiles",
+  "get_workspace_settings",
+  "get_capabilities",
+  "list_changes",
+  "list_pending_confirmations",
+  "get_confirmation",
+  "get_task",
+  "get_pipeline_run",
+  "get_chapter_method_workbench",
+  "get_chapter_mechanism_application",
+  "get_chapter_mechanism_outcome",
+  "list_pipeline_revisions",
+  "list_pipeline_runs",
+]);
+
 /**
  * 桌面端不再组合 SqlDriver/ObjectStore。WebView 只把固定 MCP 领域工具请求交给
  * Rust sidecar 网关；Node companion 才持有 Application Service、SQLite 与 ObjectStore。
@@ -14,8 +44,14 @@ type RecordValue = Record<string, unknown>;
 export function createDesktopWorkspaceApplication(options: CreateDesktopWorkspaceApplicationOptions): WorkspaceApplicationService {
   let requestNumber = 0;
   const call = async <T>(name: string, args: RecordValue = {}): Promise<T> => {
-    const request = { jsonrpc: "2.0" as const, id: `desktop:${++requestNumber}`, method: "tools/call", params: { name, arguments: args } };
-    const response = await options.invoke("desktop_mcp_request", { request });
+    const request = () => ({ jsonrpc: "2.0" as const, id: `desktop:${++requestNumber}`, method: "tools/call", params: { name, arguments: args } });
+    let response: unknown;
+    try {
+      response = await options.invoke("desktop_mcp_request", { request: request() });
+    } catch (cause) {
+      if (!RETRYABLE_READ_ONLY_TOOLS.has(name) || !isRecoverableSidecarFailure(cause)) throw cause;
+      response = await options.invoke("desktop_mcp_request", { request: request() });
+    }
     const envelope = record(response);
     const result = record(envelope?.result);
     if (!result) throw new Error("桌面领域 sidecar 返回无效响应。 ");
@@ -81,6 +117,7 @@ export function createDesktopWorkspaceApplication(options: CreateDesktopWorkspac
     },
     pipelineRuns: {
       start: (input: { command: Omit<CommandEnvelope, "tool" | "args">; runId: string; pipelineId: string; projectId?: string | null }) => command("start_pipeline_run", input.command, { runId: input.runId, pipelineId: input.pipelineId, ...(input.projectId == null ? {} : { projectId: input.projectId }) }),
+      bindTask: (input: { command: Omit<CommandEnvelope, "tool" | "args">; runId: string; stepId: string; taskId: string }) => command("bind_pipeline_run_task", input.command, { runId: input.runId, stepId: input.stepId, taskId: input.taskId }),
       completeStep: (input: { command: Omit<CommandEnvelope, "tool" | "args">; runId: string; stepId: string; note: string }) => command("complete_pipeline_run_step", input.command, { runId: input.runId, stepId: input.stepId, note: input.note }),
       get: (runId: string) => call("get_pipeline_run", { runId }),
       list: (limit?: number) => call("list_pipeline_runs", limit === undefined ? {} : { limit }),
@@ -110,10 +147,23 @@ export function createDesktopWorkspaceApplication(options: CreateDesktopWorkspac
       createCreativeRecipe: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string }) => command("create_creative_recipe", input.command, { projectId: input.projectId, chapterId: input.chapterId }),
       freezeChapterContextManifest: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; manifestId: string; tokenBudget: number; reservedOutputTokens: number }) => command("freeze_chapter_context_manifest", input.command, { projectId: input.projectId, chapterId: input.chapterId, manifestId: input.manifestId, tokenBudget: input.tokenBudget, reservedOutputTokens: input.reservedOutputTokens }),
       freezeChapterReaderManifest: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; draftDocumentId: string; manifestId: string; readerKind: "immersive" | "low_patience" | "logic_sensitive"; tokenBudget: number }) => command("freeze_chapter_reader_manifest", input.command, { projectId: input.projectId, chapterId: input.chapterId, draftDocumentId: input.draftDocumentId, manifestId: input.manifestId, readerKind: input.readerKind, tokenBudget: input.tokenBudget }),
-      commitChapter: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; chapterOrdinal: number; draftDocumentId: string; productionCommitId: string; chapterDelta: RecordValue; canonPatches: RecordValue[]; characterKnowledgePatches: RecordValue[]; readerState: RecordValue; readerPromiseUpdates: RecordValue[]; outlineDrift: RecordValue }) => command("commit_chapter", input.command, { projectId: input.projectId, chapterId: input.chapterId, chapterOrdinal: input.chapterOrdinal, draftDocumentId: input.draftDocumentId, productionCommitId: input.productionCommitId, chapterDelta: input.chapterDelta, canonPatches: input.canonPatches, characterKnowledgePatches: input.characterKnowledgePatches, readerState: input.readerState, readerPromiseUpdates: input.readerPromiseUpdates, outlineDrift: input.outlineDrift }),
+      commitChapter: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; chapterOrdinal: number; draftDocumentId: string; productionCommitId: string; outcomeId?: string; chapterDelta: RecordValue; canonPatches: RecordValue[]; characterKnowledgePatches: RecordValue[]; readerState: RecordValue; readerPromiseUpdates: RecordValue[]; outlineDrift: RecordValue }) => command("commit_chapter", input.command, { projectId: input.projectId, chapterId: input.chapterId, chapterOrdinal: input.chapterOrdinal, draftDocumentId: input.draftDocumentId, productionCommitId: input.productionCommitId, ...(input.outcomeId ? { outcomeId: input.outcomeId } : {}), chapterDelta: input.chapterDelta, canonPatches: input.canonPatches, characterKnowledgePatches: input.characterKnowledgePatches, readerState: input.readerState, readerPromiseUpdates: input.readerPromiseUpdates, outlineDrift: input.outlineDrift }),
+      requestChapterCommit: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; proposalId: string }) => command("request_chapter_production_commit", input.command, { projectId: input.projectId, chapterId: input.chapterId, proposalId: input.proposalId }),
+    },
+    chapterMethods: {
+      getWorkbench: (input: { projectId: string; chapterId: string }) => call("get_chapter_method_workbench", input),
+      getApplication: (input: { projectId: string; chapterId: string }) => call("get_chapter_mechanism_application", input),
+      saveApplication: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; expectedRevision: number | null; application: RecordValue }) => command("save_chapter_mechanism_application", input.command, { projectId: input.projectId, chapterId: input.chapterId, expectedRevision: input.expectedRevision, application: input.application }),
+      getOutcome: (input: { projectId: string; chapterId: string }) => call("get_chapter_mechanism_outcome", input),
+      saveOutcome: (input: { command: Omit<CommandEnvelope, "tool" | "args">; projectId: string; chapterId: string; expectedRevision: number | null; outcome: RecordValue }) => command("save_chapter_mechanism_outcome", input.command, { projectId: input.projectId, chapterId: input.chapterId, expectedRevision: input.expectedRevision, outcome: input.outcome }),
     },
   };
   return application as unknown as WorkspaceApplicationService;
 }
 
 function record(value: unknown): RecordValue | null { return value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : null; }
+
+function isRecoverableSidecarFailure(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /desktop MCP sidecar (is unavailable|exited unexpectedly)/i.test(message);
+}

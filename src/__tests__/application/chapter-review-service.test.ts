@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChapterReaderContextManifest } from "@/application/chapter-reader-manifest-service";
 import { createApplicationMcpJsonRpcHandler } from "@/application/application-mcp-jsonrpc";
-import { createChapterReviewService } from "@/application/chapter-review-service";
+import { createChapterReviewService, validateChapterReviewOutput } from "@/application/chapter-review-service";
 import type { CommandEnvelope } from "@/application/command-types";
 import { createWorkspaceApplicationService } from "@/application/workspace-application-service";
 import { createNodeObjectStore } from "@/persistence/node-object-store";
@@ -90,6 +90,25 @@ describe("ChapterReview Application Service", () => {
     await expect(reviews.submit({ command: command("praise"), projectId: "project_001", chapterId: "chapter_001", draftDocumentId: draft().documentId, reviewId: "review_invalid", readerManifestIds: base.readerManifestIds, readerFeedbackDocumentIds: base.readerFeedbackDocumentIds, rawOutput: JSON.stringify({ ...base, praise: ["写得很好"], issues: [] }) })).rejects.toThrow(/赞美|字段/);
   });
 
+  it("有本章采用记录时逐项冻结 Writer Manifest 与检查信号，并以 UTF-8 锚点复核目标效果", () => {
+    const chapterDraft = { ...draft(), text: "林霁🙂\r\n潮水停住。" };
+    const application = {
+      schema_version: 1 as const, kind: "chapter_mechanism_application" as const, applicationId: "production:chapter_mechanism_application:chapter_001", chapterId: "chapter_001", chapterContractRevision: 3,
+      mechanismAssetId: "mechanism_001", mechanismRevision: 2, revision: 4,
+      fields: { reason: { status: "specified" as const, value: "本章需要延迟揭示" }, plannedUse: { status: "specified" as const, value: "钟楼门前" }, observableReaderEffect: { status: "specified" as const, value: "制造疑问" }, misuseToAvoid: { status: "specified" as const, value: "不解释谜底" }, reviewSignals: [{ status: "specified" as const, value: "读者会停顿猜测" }] },
+    };
+    const output = JSON.stringify({
+      schema_version: 1, kind: "chapter_review", reviewId: "review_effect", projectId: "project_001", chapterId: "chapter_001", draftDocumentId: chapterDraft.documentId, draftRevision: "v1",
+      readerManifestIds: ["reader_immersive", "reader_low_patience", "reader_logic_sensitive"], readerFeedbackDocumentIds: ["feedback_immersive", "feedback_low_patience", "feedback_logic_sensitive"],
+      applicationId: application.applicationId, applicationRevision: 4, writerManifestId: chapterDraft.manifestId, writerManifestRevision: 7, issues: [],
+      effectAssessments: [{ signal: { status: "specified", value: "读者会停顿猜测" }, status: "partial", explanation: "异象已建立，但谜面仍较直白。", anchors: [{ startByte: 11, endByte: 17, quote: "潮水" }], sideEffect: "节奏略停顿", suggestedAction: "request_revision" }],
+    });
+    expect(validateChapterReviewOutput(output, { projectId: "project_001", chapterId: "chapter_001", draftDocumentId: chapterDraft.documentId, reviewId: "review_effect", readerManifestIds: ["reader_immersive", "reader_low_patience", "reader_logic_sensitive"], readerFeedbackDocumentIds: ["feedback_immersive", "feedback_low_patience", "feedback_logic_sensitive"], draft: chapterDraft, application, writerManifestRevision: 7 }))
+      .toMatchObject({ effectAssessments: [{ status: "partial", anchors: [{ quote: "潮水", startByte: 12, endByte: 18 }] }] });
+    const missingSignal = JSON.stringify({ ...JSON.parse(output), effectAssessments: [] });
+    expect(() => validateChapterReviewOutput(missingSignal, { projectId: "project_001", chapterId: "chapter_001", draftDocumentId: chapterDraft.documentId, reviewId: "review_effect", readerManifestIds: ["reader_immersive", "reader_low_patience", "reader_logic_sensitive"], readerFeedbackDocumentIds: ["feedback_immersive", "feedback_low_patience", "feedback_logic_sensitive"], draft: chapterDraft, application, writerManifestRevision: 7 })).toThrow(/逐项|信号/);
+  });
+
   it("MCP 仅在配置 Reviewer 服务后暴露结构化提交和读取入口", async () => {
     const schemas = createSchemaRegistry();
     registerCorePayloadSchemas(schemas);
@@ -109,7 +128,7 @@ describe("ChapterReview Application Service", () => {
 });
 
 function draft() {
-  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", taskId: "writer_task_001", revision: "v1" as const };
+  return { documentId: "production:chapter_draft:chapter_001:v1", projectId: "project_001", chapterId: "chapter_001", manifestId: "writer_manifest_001", title: "第一章 V1", text: "林霁推开钟楼的门，潮水在门外停住。", model: "qwen3:8b", executionRef: "writer_task_001", revision: "v1" as const };
 }
 
 function readerManifest(manifestId: string): ChapterReaderContextManifest | null {
