@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: clean-clone-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -18,9 +22,9 @@ jobs:
           fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
       - name: Install exact dependencies
         run: npm ci
       - name: TypeScript and unit gates
@@ -36,6 +40,11 @@ jobs:
       - name: Rust gateway tests
         working-directory: src-tauri
         run: cargo test
+      - name: Rust format and lint gates
+        working-directory: src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --all-features -- -D warnings
       - name: MCP initialize and tools/list smoke
         shell: pwsh
         run: |

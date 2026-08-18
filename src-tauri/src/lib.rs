@@ -43,7 +43,10 @@ fn desktop_mcp_request(
         .is_err()
     {
         *guard = None;
-        return Err("Ainovr desktop MCP sidecar is unavailable. Please restart the desktop application.".to_string());
+        return Err(
+            "Ainovr desktop MCP sidecar is unavailable. Please restart the desktop application."
+                .to_string(),
+        );
     }
     let mut response = String::new();
     if child
@@ -71,7 +74,9 @@ fn assert_desktop_mcp_request(request: &JsonValue) -> Result<(), String> {
         .and_then(JsonValue::as_str)
         .ok_or_else(|| "Desktop request method is required.".to_string())?;
     if method != "initialize" && method != "ping" && method != "tools/call" {
-        return Err("Desktop sidecar only accepts MCP initialize, ping, and tools/call.".to_string());
+        return Err(
+            "Desktop sidecar only accepts MCP initialize, ping, and tools/call.".to_string(),
+        );
     }
     if method == "tools/call" {
         let name = object
@@ -95,21 +100,28 @@ fn spawn_desktop_mcp_sidecar(app: &AppHandle) -> Result<DesktopMcpChild, String>
                 .resource_dir()
                 .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?,
         )?
-            .join("ainovr-mcp.mjs")
+        .join("ainovr-mcp.mjs")
     };
     if !script.is_file() {
-        return Err(format!("Ainovr desktop MCP companion is missing: {}", script.display()));
+        return Err(format!(
+            "Ainovr desktop MCP companion is missing: {}",
+            script.display()
+        ));
     }
     let script = node_process_path(script);
     let node = if cfg!(debug_assertions) {
-        PathBuf::from(std::env::var("AINOVR_NODE_EXECUTABLE").unwrap_or_else(|_| "node".to_string()))
+        PathBuf::from(
+            std::env::var("AINOVR_NODE_EXECUTABLE").unwrap_or_else(|_| "node".to_string()),
+        )
     } else {
-        node_process_path(release_sidecar_directory(
-            app.path()
-                .resource_dir()
-                .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?,
-        )?
-            .join("node.exe"))
+        node_process_path(
+            release_sidecar_directory(
+                app.path()
+                    .resource_dir()
+                    .map_err(|error| format!("Could not resolve Ainovr resources: {error}"))?,
+            )?
+            .join("node.exe"),
+        )
     };
     let workspace = node_process_path(workspace_root(app)?);
     let mut command = Command::new(node);
@@ -176,7 +188,10 @@ fn release_workspace_root_with_override(
     app_data_dir: PathBuf,
     environment_workspace: Option<&str>,
 ) -> Result<PathBuf, String> {
-    if let Some(workspace) = environment_workspace.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(workspace) = environment_workspace
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         return Ok(PathBuf::from(workspace));
     }
     if app_data_dir.as_os_str().is_empty() {
@@ -215,6 +230,17 @@ fn development_workspace_root(current: PathBuf) -> Result<PathBuf, String> {
     Ok(current)
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .manage(DesktopMcpSidecar {
+            child: Mutex::new(None),
+        })
+        .invoke_handler(tauri::generate_handler![desktop_mcp_request])
+        .run(tauri::generate_context!())
+        .expect("error while running Ainovr application");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,7 +248,8 @@ mod tests {
     #[test]
     fn development_workspace_root_uses_parent_of_src_tauri() {
         assert_eq!(
-            development_workspace_root(PathBuf::from(r"C:\work\Ainovr\src-tauri")).expect("resolve workspace root"),
+            development_workspace_root(PathBuf::from(r"C:\work\Ainovr\src-tauri"))
+                .expect("resolve workspace root"),
             PathBuf::from(r"C:\work\Ainovr")
         );
     }
@@ -230,13 +257,20 @@ mod tests {
     #[test]
     fn development_workspace_root_preserves_an_existing_workspace_directory() {
         let current = PathBuf::from(r"C:\work\Ainovr");
-        assert_eq!(development_workspace_root(current.clone()).expect("resolve workspace root"), current);
+        assert_eq!(
+            development_workspace_root(current.clone()).expect("resolve workspace root"),
+            current
+        );
     }
 
     #[test]
     fn release_workspace_root_uses_user_writable_application_data() {
         assert_eq!(
-            release_workspace_root_with_override(PathBuf::from(r"C:\Users\user\AppData\Local\com.ainovr.app"), None).expect("resolve app data"),
+            release_workspace_root_with_override(
+                PathBuf::from(r"C:\Users\user\AppData\Local\com.ainovr.app"),
+                None
+            )
+            .expect("resolve app data"),
             PathBuf::from(r"C:\Users\user\AppData\Local\com.ainovr.app")
         );
         assert!(release_workspace_root_with_override(PathBuf::new(), None).is_err());
@@ -267,7 +301,9 @@ mod tests {
     #[test]
     fn node_process_paths_remove_windows_verbatim_prefixes() {
         assert_eq!(
-            node_process_path(PathBuf::from(r"\\?\S:\Ainovr\resources\desktop-sidecar\ainovr-mcp.mjs")),
+            node_process_path(PathBuf::from(
+                r"\\?\S:\Ainovr\resources\desktop-sidecar\ainovr-mcp.mjs"
+            )),
             PathBuf::from(r"S:\Ainovr\resources\desktop-sidecar\ainovr-mcp.mjs")
         );
         assert_eq!(
@@ -282,17 +318,14 @@ mod tests {
 
     #[test]
     fn desktop_sidecar_rejects_non_mcp_and_unnamed_tool_requests() {
-        assert!(assert_desktop_mcp_request(&serde_json::json!({ "jsonrpc": "2.0", "method": "sql_query" })).is_err());
-        assert!(assert_desktop_mcp_request(&serde_json::json!({ "jsonrpc": "2.0", "method": "tools/call", "params": {} })).is_err());
+        assert!(assert_desktop_mcp_request(
+            &serde_json::json!({ "jsonrpc": "2.0", "method": "sql_query" })
+        )
+        .is_err());
+        assert!(assert_desktop_mcp_request(
+            &serde_json::json!({ "jsonrpc": "2.0", "method": "tools/call", "params": {} })
+        )
+        .is_err());
         assert!(assert_desktop_mcp_request(&serde_json::json!({ "jsonrpc": "2.0", "method": "tools/call", "params": { "name": "get_workspace_status" } })).is_ok());
     }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .manage(DesktopMcpSidecar { child: Mutex::new(None) })
-        .invoke_handler(tauri::generate_handler![desktop_mcp_request])
-        .run(tauri::generate_context!())
-        .expect("error while running Ainovr application");
 }

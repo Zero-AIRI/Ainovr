@@ -33,6 +33,11 @@ archive/legacy-2026-06/.env.local
 
 # local runtime data（便携式：开发期数据落这里）
 data/
+/.runs/
+/.worktrees/
+/.codex-run/
+/.tmp-attachments/
+/data-*-smoke/
 
 # crash dumps
 *.stackdump
